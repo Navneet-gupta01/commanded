@@ -113,7 +113,7 @@ defmodule Commanded.Assertions.EventAssertions do
     try do
       apply(callback_fn, [subscription])
     after
-      remove_subscription(subscription_name)
+      remove_subscription(subscription)
     end
   end
 
@@ -162,7 +162,8 @@ defmodule Commanded.Assertions.EventAssertions do
     expected_event =
       Enum.find(received_events, fn received_event ->
         case received_event.event_type do
-          ^expected_type -> apply(predicate_fn, [received_event.data])
+          ^expected_type when is_function(predicate_fn, 2) -> apply(predicate_fn, [received_event.data, received_event])
+          ^expected_type when is_function(predicate_fn, 1) -> apply(predicate_fn, [received_event.data])
           _ -> false
         end
       end)
@@ -174,10 +175,11 @@ defmodule Commanded.Assertions.EventAssertions do
   end
 
   defp create_subscription(subscription_name),
-    do: EventStore.subscribe_to_all_streams(subscription_name, self(), :origin)
+    do: EventStore.subscribe_to(:all, subscription_name, self(), :origin)
 
-  defp remove_subscription(subscription_name),
-    do: EventStore.unsubscribe_from_all_streams(subscription_name)
+  defp remove_subscription(subscription),
+    do: EventStore.unsubscribe(subscription)
 
-  defp ack_events(subscription, events), do: EventStore.ack_event(subscription, List.last(events))
+  defp ack_events(subscription, events),
+    do: EventStore.ack_event(subscription, List.last(events))
 end

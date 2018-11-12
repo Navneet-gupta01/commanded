@@ -5,15 +5,69 @@
 ### Enhancements
 
 - Do not start new process manager instance on `:continue` ([#181](https://github.com/commanded/commanded/pull/181)).
-- Support [`Phoenix.PubSub` v1.1.0](https://hexdocs.pm/phoenix/1.1.0/Phoenix.PubSub.html).
 - Rename `uuid` dependency to `elixir_uuid` ([#178](https://github.com/commanded/commanded/pull/178)).
 - Allow aggregate identity to be of any type that implements the `String.Chars` protocol ([#166](https://github.com/commanded/commanded/pull/166)).
 - Process manager and event handler error & exception handling ([#192](https://github.com/commanded/commanded/pull/192)).
 - Process manager event handling timeout ([#193](https://github.com/commanded/commanded/pull/193)).
+- Allow event handlers to subscribe to individual streams ([#203](https://github.com/commanded/commanded/pull/203)).
+- Add new values for `expected_version` for event store append events behaviour ([#127](https://github.com/commanded/commanded/pull/127)).
+- Export `Commanded.Commands.Router` macros in `.formatter.exs` file ([#204](https://github.com/commanded/commanded/pull/204)).
+- Generate specs and docs for Router dispatch functions only once ([#206](https://github.com/commanded/commanded/pull/206)).
+- Allow two-arity predicate function in `wait_for_event` receiving both event data and recorded event struct ([#213](https://github.com/commanded/commanded/pull/213)).
+- Make poison an optional dependency ([#215](https://github.com/commanded/commanded/pull/215)).
 
 ### Bug fixes
 
 - Fix snapshot recording ([#196](https://github.com/commanded/commanded/pull/196)).
+- Fix typo in `include_execution_result` global router option ([#216](https://github.com/commanded/commanded/pull/216)).
+
+### Breaking changes
+
+- Extend aggregate lifespan behaviour to include `after_error/1` and `after_command/1` callbacks ([#210](https://github.com/commanded/commanded/pull/210)).
+
+    Previously you only had to define an `after_event/1` callback function to implement the `Commanded.Aggregates.AggregateLifespan` behaviour:
+
+    ```elixir
+    defmodule BankAccountLifespan do
+      @behaviour Commanded.Aggregates.AggregateLifespan
+
+      def after_event(%BankAccountClosed{}), do: :stop
+      def after_event(_event), do: :infinity
+    end
+    ```
+
+    Now you must also define `after_command/1` and `after_error/1` callback functions:
+
+    ```elixir
+    defmodule BankAccountLifespan do
+      @behaviour Commanded.Aggregates.AggregateLifespan
+
+      def after_event(%BankAccountClosed{}), do: :stop
+      def after_event(_event), do: :infinity
+
+      def after_command(%CloseAccount{}), do: :stop
+      def after_command(_command), do: :infinity
+
+      def after_error(:invalid_initial_balance), do: :stop
+      def after_error(_error), do: :stop
+    end
+    ```
+
+## v0.17.2
+
+### Enhancements
+
+- Remove default `error/4` callback function from process manager to silence deprecation warning.
+
+## v0.17.1
+
+### Enhancements
+
+- Support `Phoenix.PubSub` v1.1.0.
+
+### Bug fixes
+
+- Set default aggregate lifespan timeout to `:infinity` ([#200](https://github.com/commanded/commanded/pull/200)).
 
 ## v0.17.0
 
