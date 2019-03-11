@@ -308,6 +308,37 @@ defmodule Commanded.ProcessManagers.ProcessRouter do
           |> Enum.reverse()
           |> Enum.reduce(state, &delegate_event(&1, event, &2))
 
+        # @@@@@@@@@@@@@@@@@@@@
+        {:continue} ->
+            Logger.debug(fn ->
+              describe(state) <>
+                " is interested in event: #{inspect(event_number)} (#{inspect(stream_id)}@#{
+                  inspect(stream_version)
+                })"
+            end)
+
+            {processManagers, state} = continue_all_process_managers(state)
+
+            processManagers
+            |> Enum.reduce(state, fn {process_uuid, process_instance}, state ->
+              case ProcessManagerInstance.new?(process_instance) do
+                false ->
+                  delegate_event(process_instance, event, state)
+
+                true ->
+                  Logger.debug(fn ->
+                    describe(state) <>
+                      " is not interested in event: #{inspect(event_number)} (#{inspect(stream_id)}@#{
+                        inspect(stream_version)
+                      })"
+                  end)
+
+                  stop_process_manager(process_uuid, state)
+
+                  ack_and_continue(event, state)
+              end
+            end)
+        # @@@@@@@@@@@@@@@@@@@@
         {:continue, process_uuid} ->
           Logger.debug(fn -> describe(state) <> " is interested in event " <> describe(event) end)
 
@@ -452,6 +483,23 @@ defmodule Commanded.ProcessManagers.ProcessRouter do
     }
 
     {process_manager, state}
+  end
+
+  defp continue_process_manager(process_uuid, %State{} = state) do
+    %State{process_managers: process_managers} = state
+
+    case Map.get(process_managers, process_uuid) do
+      nil ->
+        start_process_manager(process_uuid, state)
+
+      process_manager ->
+        {process_manager, state}
+    end
+  end
+
+  defp continue_all_process_managers(%State{} = state) do
+    %State{process_managers: process_managers} = state
+    {process_managers, state}
   end
 
   defp stop_process_manager(process_uuid, %State{} = state) do

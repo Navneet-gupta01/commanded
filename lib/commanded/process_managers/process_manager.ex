@@ -162,6 +162,7 @@ defmodule Commanded.ProcessManagers.ProcessManager do
   @callback interested?(domain_event) ::
               {:start, process_uuid}
               | {:start!, process_uuid}
+              | {:continue}
               | {:continue, process_uuid}
               | {:continue!, process_uuid}
               | {:stop, process_uuid}
