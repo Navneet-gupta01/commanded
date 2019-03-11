@@ -6,8 +6,11 @@ Domain events indicate that something of importance has occurred, within the con
 
 Create a module per domain event and define the fields with `defstruct`. An event **should contain** a field to uniquely identify the aggregate instance (e.g. `account_number`).
 
+Remember to derive the `Jason.Encoder` protocol for the event struct to ensure JSON serialization is supported, as shown below.
+
 ```elixir
 defmodule BankAccountOpened do
+  @derive Jason.Encoder
   defstruct [:account_number, :initial_balance]
 end
 ```
@@ -17,6 +20,8 @@ Note, due to event serialization you should expect that only: strings, numbers a
 ## Event handlers
 
 Event handlers allow you to execute code that reacts to domain events: to build read model projections; dispatch commands to other aggregates; and to interact with third-party systems such as sending emails.
+
+Commanded guarantees only one instance of an event handler will run, regardless of how many nodes are running (event when not using distributed Erlang). This is enforced by the event store subscription (Postgres advisory locks in Elixir Event Store).
 
 Use the `Commanded.Event.Handler` macro within your event handler module to implement the defined behaviour. This consists of a single `handle/2` function that receives each published domain event and its metadata, including the event's unique event number. It should return `:ok` on success or `{:error, :reason}` on failure. You can return `{:error, :already_seen_event}` to skip events that have already been handled, due to the at-least-once event delivery of the supported event stores.
 
@@ -44,11 +49,9 @@ The name given to the event handler **must be** unique and remain unchanged betw
 You can choose to start the event handler's event store subscription from the `:origin`, `:current` position, or an exact event number using the `start_from` option. The default is to use the origin so your handler will receive all events.
 
 ```elixir
-# start from :origin, :current, or an explicit event number (e.g. 1234)
 defmodule ExampleHandler do
+  # Define `start_from` as one of :origin, :current, or an explicit event number (e.g. 1234)
   use Commanded.Event.Handler, name: "ExampleHandler", start_from: :origin
-
-  # ...
 end
 ```
 

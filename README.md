@@ -23,13 +23,14 @@ Please refer to the [CHANGELOG](CHANGELOG.md) for features, bug fixes, and any u
 
 - [Changelog](CHANGELOG.md)
 - [Wiki](https://github.com/commanded/commanded/wiki)
+- [What is CQRS/ES?](https://kalele.io/blog-posts/really-simple-cqrs/)
 - [Frequently asked questions](https://github.com/commanded/commanded/wiki/FAQ)
 - [Getting help](https://github.com/commanded/commanded/wiki/Getting-help)
 - [Latest published Hex package](https://hex.pm/packages/commanded) & [documentation](https://hexdocs.pm/commanded/)
 
 MIT License
 
-[![Build Status](https://travis-ci.org/commanded/commanded.svg?branch=master)](https://travis-ci.org/commanded/commanded) [![Join the chat at https://gitter.im/commanded/Lobby](https://badges.gitter.im/commanded/Lobby.svg)](https://gitter.im/commanded/Lobby?utm_source=badge&utm_medium=badge&utm_campaign=pr-badge&utm_content=badge)
+[![Build Status](https://travis-ci.com/commanded/commanded.svg?branch=master)](https://travis-ci.com/commanded/commanded) [![Join the chat at https://gitter.im/commanded/Lobby](https://badges.gitter.im/commanded/Lobby.svg)](https://gitter.im/commanded/Lobby?utm_source=badge&utm_medium=badge&utm_campaign=pr-badge&utm_content=badge)
 
 ---
 
@@ -114,14 +115,18 @@ You should include unit tests to cover any changes. Run `mix test` to execute th
 - [Bernardo Amorim](https://github.com/bamorim)
 - [Brenton Annan](https://github.com/brentonannan)
 - [Chris Brodt](https://github.com/uberbrodt)
+- [Chris Martin](https://github.com/trbngr)
 - [David Carlin](https://github.com/davich)
+- [Danni Friedland](https://github.com/BlueHotDog)
 - [Florian Ebeling](https://github.com/febeling)
 - [Henry Hazan](https://github.com/henry-hz)
 - [JC](https://github.com/jccf091)
 - [Joan Zapata](https://github.com/JoanZapata)
+- [João Thallis](https://github.com/joaothallis)
 - [Kok J Sam](https://github.com/sammkj)
 - [Leif Gensert](https://github.com/leifg)
 - [Luís Ferreira](https://github.com/zamith)
+- [Matt Doughty](https://github.com/m-doughty)
 - [Miguel Palhas](https://github.com/naps62)
 - [Nigel Thorne](https://github.com/nigelthorne)
 - [Olafur Arason](https://github.com/olafura)

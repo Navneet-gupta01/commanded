@@ -4,7 +4,13 @@
 
 ### Enhancements
 
-- Do not start new process manager instance on `:continue` ([#181](https://github.com/commanded/commanded/pull/181)).
+- Update typespec for `data` and `metadata` fields in `Commanded.EventStore.EventData` struct ([#246](https://github.com/commanded/commanded/pull/246)).
+- Add `.formatter.exs` to Hex package ([#247](https://github.com/commanded/commanded/pull/247)).
+
+## v0.18.0
+
+### Enhancements
+
 - Rename `uuid` dependency to `elixir_uuid` ([#178](https://github.com/commanded/commanded/pull/178)).
 - Allow aggregate identity to be of any type that implements the `String.Chars` protocol ([#166](https://github.com/commanded/commanded/pull/166)).
 - Process manager and event handler error & exception handling ([#192](https://github.com/commanded/commanded/pull/192)).
@@ -14,44 +20,98 @@
 - Export `Commanded.Commands.Router` macros in `.formatter.exs` file ([#204](https://github.com/commanded/commanded/pull/204)).
 - Generate specs and docs for Router dispatch functions only once ([#206](https://github.com/commanded/commanded/pull/206)).
 - Allow two-arity predicate function in `wait_for_event` receiving both event data and recorded event struct ([#213](https://github.com/commanded/commanded/pull/213)).
-- Make poison an optional dependency ([#215](https://github.com/commanded/commanded/pull/215)).
+- Allow `:infinity` timeout on command dispatch ([#227](https://github.com/commanded/commanded/pull/227))
+- Strict process manager routing ([#243](https://github.com/commanded/commanded/pull/243)).
+- Allow `Commanded.Aggregate.Multi` to be nested ([#244](https://github.com/commanded/commanded/pull/244)).
+- Add `child_spec/0` function to `Commanded.EventStore` behaviour.
+- Add `delete_subscription/2` to `Commanded.EventStore` behaviour ([#245](https://github.com/commanded/commanded/pull/245)).
+- Add `refute_receive_event/2` to `Commanded.Assertions.EventAssertions` test helpers.
+
+### Bug fixes
+
+- Fix typo in `include_execution_result` global router option ([#216](https://github.com/commanded/commanded/pull/216)).
+- Handle the `{:ok, _}` tuple dispatch result in process manager command dispatch ([#236](https://github.com/commanded/commanded/pull/236)).
+- Allow string keys for `Commanded.Middleware.Pipeline.assign_metadata/3`, atoms are being deprecated ([#228](https://github.com/commanded/commanded/pull/228))
+- Fix `Commanded.PubSub.subscribe/1` typespec ([#222](https://github.com/commanded/commanded/pull/222)).
+
+### Breaking changes
+
+- Migrate to [Jason](https://hex.pm/packages/jason) for JSON serialization ([#234](https://github.com/commanded/commanded/pull/234)).
+
+  You will need to add Jason as a dependency in `mix.exs`:
+
+  ```elixir
+  defp deps do
+    [{:jason, "~> 1.1"}]
+  end
+  ```
+
+  Jason has _no support_ for encoding arbitrary structs - explicit implementation of the `Jason.Encoder` protocol is always required. You *must* update all your domain event modules, aggregate state (when using state snapshotting), and process manager state to include `@derive Jason.Encoder` as shown below:
+
+  ```elixir
+  defmodule AnEvent do
+    @derive Jason.Encoder
+    defstruct [:field]
+  end
+  ```
+
+- Extend aggregate lifespan behaviour to include `after_error/1` and `after_command/1` callbacks ([#210](https://github.com/commanded/commanded/pull/210)).
+
+  Previously you only had to define an `after_event/1` callback function to implement the `Commanded.Aggregates.AggregateLifespan` behaviour:
+
+  ```elixir
+  defmodule BankAccountLifespan do
+    @behaviour Commanded.Aggregates.AggregateLifespan
+
+    def after_event(%BankAccountClosed{}), do: :stop
+    def after_event(_event), do: :infinity
+  end
+  ```
+
+  Now you must also define `after_command/1` and `after_error/1` callback functions:
+
+  ```elixir
+  defmodule BankAccountLifespan do
+    @behaviour Commanded.Aggregates.AggregateLifespan
+
+    def after_event(%BankAccountClosed{}), do: :stop
+    def after_event(_event), do: :infinity
+
+    def after_command(%CloseAccount{}), do: :stop
+    def after_command(_command), do: :infinity
+
+    def after_error(:invalid_initial_balance), do: :stop
+    def after_error(_error), do: :stop
+  end
+  ```
+
+### Upgrading
+
+Please ensure you upgrade the following event store dependencies.
+
+Using the Elixir [EventStore](https://github.com/commanded/eventstore):
+
+- `eventstore` to [v0.16.0](https://hex.pm/packages/eventstore)
+- `commanded_eventstore_adapter` to [v0.5.0](https://hex.pm/packages/commanded_eventstore_adapter)
+
+Using Greg Young's [Event Store](https://eventstore.org/):
+
+- `commanded_extreme_adapter` to [v0.6.0](https://hex.pm/packages/commanded_extreme_adapter)
+
+Commanded Ecto projections:
+
+- `commanded_ecto_projections` to [v0.8.0](https://hex.pm/packages/commanded_ecto_projections)
+
+Commanded scheduler:
+
+- `commanded_scheduler` to [v0.2.0](https://hex.pm/packages/commanded_scheduler)
+
+## v0.17.3
 
 ### Bug fixes
 
 - Fix snapshot recording ([#196](https://github.com/commanded/commanded/pull/196)).
-- Fix typo in `include_execution_result` global router option ([#216](https://github.com/commanded/commanded/pull/216)).
-
-### Breaking changes
-
-- Extend aggregate lifespan behaviour to include `after_error/1` and `after_command/1` callbacks ([#210](https://github.com/commanded/commanded/pull/210)).
-
-    Previously you only had to define an `after_event/1` callback function to implement the `Commanded.Aggregates.AggregateLifespan` behaviour:
-
-    ```elixir
-    defmodule BankAccountLifespan do
-      @behaviour Commanded.Aggregates.AggregateLifespan
-
-      def after_event(%BankAccountClosed{}), do: :stop
-      def after_event(_event), do: :infinity
-    end
-    ```
-
-    Now you must also define `after_command/1` and `after_error/1` callback functions:
-
-    ```elixir
-    defmodule BankAccountLifespan do
-      @behaviour Commanded.Aggregates.AggregateLifespan
-
-      def after_event(%BankAccountClosed{}), do: :stop
-      def after_event(_event), do: :infinity
-
-      def after_command(%CloseAccount{}), do: :stop
-      def after_command(_command), do: :infinity
-
-      def after_error(:invalid_initial_balance), do: :stop
-      def after_error(_error), do: :stop
-    end
-    ```
+- Fixed warning about deprecated time unit in elixir 1.8 ([#239](https://github.com/commanded/commanded/pull/239)).
 
 ## v0.17.2
 
