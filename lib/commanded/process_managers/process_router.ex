@@ -310,12 +310,7 @@ defmodule Commanded.ProcessManagers.ProcessRouter do
 
         # @@@@@@@@@@@@@@@@@@@@
         {:continue} ->
-            Logger.debug(fn ->
-              describe(state) <>
-                " is interested in event: #{inspect(event_number)} (#{inspect(stream_id)}@#{
-                  inspect(stream_version)
-                })"
-            end)
+            Logger.debug(fn -> describe(state) <> " is interested in event " <> describe(event) end)
 
             {processManagers, state} = continue_all_process_managers(state)
 
@@ -327,10 +322,7 @@ defmodule Commanded.ProcessManagers.ProcessRouter do
 
                 true ->
                   Logger.debug(fn ->
-                    describe(state) <>
-                      " is not interested in event: #{inspect(event_number)} (#{inspect(stream_id)}@#{
-                        inspect(stream_version)
-                      })"
+                    describe(state) <> " is not interested in event " <> describe(event)
                   end)
 
                   stop_process_manager(process_uuid, state)
