@@ -10,7 +10,9 @@ defmodule Commanded.Event.Handler do
   ## Example
 
       defmodule ExampleHandler do
-        use Commanded.Event.Handler, name: "ExampleHandler"
+        use Commanded.Event.Handler,
+          application: ExampleApp,
+          name: "ExampleHandler"
 
         def handle(%AnEvent{..}, _metadata) do
           # ... process the event
@@ -34,6 +36,7 @@ defmodule Commanded.Event.Handler do
 
       defmodule ExampleHandler do
         use Commanded.Event.Handler,
+          application: ExampleApp,
           name: __MODULE__
       end
 
@@ -56,6 +59,7 @@ defmodule Commanded.Event.Handler do
 
       defmodule ExampleHandler do
         use Commanded.Event.Handler,
+          application: ExampleApp,
           name: "ExampleHandler",
           start_from: :origin
       end
@@ -73,6 +77,7 @@ defmodule Commanded.Event.Handler do
 
       defmodule ExampleHandler do
         use Commanded.Event.Handler,
+          application: ExampleApp,
           name: __MODULE__,
           subscribe_to: "stream1234"
       end
@@ -88,7 +93,9 @@ defmodule Commanded.Event.Handler do
   terminate the event handler with an error.
 
       defmodule ExampleHandler do
-        use Commanded.Event.Handler, name: "ExampleHandler"
+        use Commanded.Event.Handler,
+          application: ExampleApp,
+          name: "ExampleHandler"
 
         def init do
           # optional initialisation
@@ -120,7 +127,9 @@ defmodule Commanded.Event.Handler do
   ### Example error handling
 
       defmodule ExampleHandler do
-        use Commanded.Event.Handler, name: __MODULE__
+        use Commanded.Event.Handler,
+          application: ExampleApp,
+          name: __MODULE__
 
         require Logger
 
@@ -177,6 +186,7 @@ defmodule Commanded.Event.Handler do
 
       defmodule ExampleHandler do
         use Commanded.Event.Handler,
+          application: ExampleApp,
           name: "ExampleHandler",
           consistency: :strong
       end
@@ -188,7 +198,9 @@ defmodule Commanded.Event.Handler do
 
   require Logger
 
-  alias Commanded.Event.{FailureContext, Handler}
+  alias Commanded.Event.FailureContext
+  alias Commanded.Event.Handler
+  alias Commanded.Event.Upcast
   alias Commanded.EventStore
   alias Commanded.EventStore.RecordedEvent
   alias Commanded.Subscriptions
@@ -260,16 +272,20 @@ defmodule Commanded.Event.Handler do
     quote location: :keep do
       @before_compile unquote(__MODULE__)
 
-      @behaviour Commanded.Event.Handler
+      @behaviour Handler
 
-      @opts unquote(opts) || []
-      @name Commanded.Event.Handler.parse_name(__MODULE__, @opts[:name])
+      {application, name} = Handler.compile_config(__MODULE__, unquote(opts))
+
+      @opts unquote(opts)
+      @application application
+      @name name
 
       @doc false
       def start_link(opts \\ []) do
-        opts = Commanded.Event.Handler.start_opts(__MODULE__, Keyword.drop(@opts, [:name]), opts)
+        module_opts = Keyword.drop(@opts, [:application, :name])
+        opts = Handler.start_opts(__MODULE__, module_opts, opts)
 
-        Commanded.Event.Handler.start_link(@name, __MODULE__, opts)
+        Handler.start_link(@application, @name, __MODULE__, opts)
       end
 
       @doc """
@@ -300,13 +316,30 @@ defmodule Commanded.Event.Handler do
       @doc false
       def init, do: :ok
 
-      defoverridable init: 0
+      @doc false
+      def before_reset, do: :ok
+
+      defoverridable init: 0, before_reset: 0
     end
   end
 
   @doc false
-  def parse_name(module, name) when name in [nil, ""],
-    do: raise("#{inspect(module)} expects `:name` to be given")
+  def compile_config(module, opts) do
+    application = Keyword.get(opts, :application)
+
+    unless application do
+      raise ArgumentError, inspect(module) <> " expects :application option"
+    end
+
+    name = parse_name(module, Keyword.get(opts, :name))
+
+    {application, name}
+  end
+
+  @doc false
+  def parse_name(module, name) when name in [nil, ""] do
+    raise ArgumentError, inspect(module) <> " expects :name option"
+  end
 
   def parse_name(_module, name) when is_binary(name), do: name
   def parse_name(_module, name), do: inspect(name)
@@ -319,10 +352,11 @@ defmodule Commanded.Event.Handler do
       |> Keyword.split([:consistency, :start_from, :subscribe_to] ++ additional_allowed_opts)
 
     if Enum.any?(invalid) do
-      raise "#{inspect(module)} specifies invalid options: #{inspect(Keyword.keys(invalid))}"
-    else
-      valid
+      raise ArgumentError,
+            inspect(module) <> " specifies invalid options: " <> inspect(Keyword.keys(invalid))
     end
+
+    valid
   end
 
   # Include default `handle/2` and `error/3` callback functions in module
@@ -340,6 +374,7 @@ defmodule Commanded.Event.Handler do
 
   @doc false
   defstruct [
+    :application,
     :consistency,
     :handler_name,
     :handler_module,
@@ -351,10 +386,11 @@ defmodule Commanded.Event.Handler do
   ]
 
   @doc false
-  def start_link(handler_name, handler_module, opts \\ []) do
-    name = name(handler_name)
+  def start_link(application, handler_name, handler_module, opts \\ []) do
+    name = name(application, handler_name)
 
     handler = %Handler{
+      application: application,
       handler_name: handler_name,
       handler_module: handler_module,
       consistency: consistency(opts),
@@ -362,13 +398,14 @@ defmodule Commanded.Event.Handler do
       subscribe_to: subscribe_to(opts)
     }
 
-    Registration.start_link(name, __MODULE__, handler)
+    Registration.start_link(application, name, __MODULE__, handler)
   end
 
-  defp name(name), do: {__MODULE__, name}
+  def name(application, handler_name), do: {application, __MODULE__, handler_name}
 
   @doc false
   def init(%Handler{} = state) do
+    :ok = register_subscription(state)
     :ok = GenServer.cast(self(), :subscribe_to_events)
 
     {:ok, state}
@@ -397,21 +434,39 @@ defmodule Commanded.Event.Handler do
   end
 
   @doc false
+  def handle_info(:reset, %Handler{} = state) do
+    %Handler{handler_module: handler_module} = state
+
+    case handler_module.before_reset() do
+      :ok ->
+        try do
+          state = state |> reset_subscription() |> subscribe_to_events()
+
+          {:noreply, state}
+        catch
+          {:error, reason} ->
+            {:stop, reason, state}
+        end
+
+      {:stop, reason} ->
+        Logger.debug(fn ->
+          describe(state) <>
+            " `before_reset/0` callback has requested to stop. (reason: #{inspect(reason)})"
+        end)
+
+        {:stop, reason, state}
+    end
+  end
+
+  @doc false
   # Subscription to event store has successfully subscribed, init event handler
   def handle_info({:subscribed, subscription}, %Handler{subscription: subscription} = state) do
     Logger.debug(fn -> describe(state) <> " has successfully subscribed to event store" end)
 
-    %Handler{
-      consistency: consistency,
-      handler_module: handler_module,
-      handler_name: handler_name
-    } = state
+    %Handler{handler_module: handler_module} = state
 
     case handler_module.init() do
       :ok ->
-        # Register this event handler as a subscription with the given consistency
-        :ok = Subscriptions.register(handler_name, consistency)
-
         {:noreply, state}
 
       {:stop, reason} ->
@@ -426,36 +481,61 @@ defmodule Commanded.Event.Handler do
     Logger.debug(fn -> describe(state) <> " received events: #{inspect(events)}" end)
 
     try do
-      state = Enum.reduce(events, state, &handle_event/2)
+      state =
+        events
+        |> Upcast.upcast_event_stream()
+        |> Enum.reduce(state, &handle_event/2)
 
       {:noreply, state}
     catch
       {:error, reason} ->
-        # stop after event handling returned an error
+        # Stop after event handling returned an error
         {:stop, reason, state}
     end
   end
 
   @doc false
-  # Stop event handler when event store subscription process terminates.
-  def handle_info(
-        {:DOWN, ref, :process, pid, reason},
-        %Handler{subscription_ref: ref, subscription: pid} = state
-      ) do
+  def handle_info({:DOWN, ref, :process, _pid, reason}, %Handler{subscription_ref: ref} = state) do
     Logger.debug(fn -> describe(state) <> " subscription DOWN due to: #{inspect(reason)}" end)
 
+    # Stop event handler when event store subscription process terminates.
     {:stop, reason, state}
+  end
+
+  # Register this event handler as a subscription with the given consistency
+  defp register_subscription(%Handler{} = state) do
+    %Handler{application: application, consistency: consistency, handler_name: name} = state
+
+    Subscriptions.register(application, name, consistency)
+  end
+
+  defp reset_subscription(%Handler{} = state) do
+    %Handler{
+      application: application,
+      handler_name: handler_name,
+      subscribe_to: subscribe_to,
+      subscription_ref: subscription_ref,
+      subscription: subscription
+    } = state
+
+    Process.demonitor(subscription_ref)
+
+    :ok = EventStore.unsubscribe(application, subscription)
+    :ok = EventStore.delete_subscription(application, subscribe_to, handler_name)
+
+    %Handler{state | last_seen_event: nil, subscription: nil, subscription_ref: nil}
   end
 
   defp subscribe_to_events(%Handler{} = state) do
     %Handler{
+      application: application,
       handler_name: handler_name,
       subscribe_from: subscribe_from,
       subscribe_to: subscribe_to
     } = state
 
     {:ok, subscription} =
-      EventStore.subscribe_to(subscribe_to, handler_name, self(), subscribe_from)
+      EventStore.subscribe_to(application, subscribe_to, handler_name, self(), subscribe_from)
 
     subscription_ref = Process.monitor(subscription)
 
@@ -571,13 +651,14 @@ defmodule Commanded.Event.Handler do
 
   defp ack_event(event, %Handler{} = state) do
     %Handler{
+      application: application,
       consistency: consistency,
       handler_name: handler_name,
       subscription: subscription
     } = state
 
-    :ok = EventStore.ack_event(subscription, event)
-    :ok = Subscriptions.ack_event(handler_name, consistency, event)
+    :ok = EventStore.ack_event(application, subscription, event)
+    :ok = Subscriptions.ack_event(application, handler_name, consistency, event)
   end
 
   @enrich_metadata_fields [

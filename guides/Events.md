@@ -1,4 +1,4 @@
-# Event handling
+# Events
 
 ## Domain events
 
@@ -29,7 +29,9 @@ Use pattern matching to match on each type of event you are interested in. A cat
 
 ```elixir
 defmodule ExampleHandler do
-  use Commanded.Event.Handler, name: "ExampleHandler"
+  use Commanded.Event.Handler,
+    application: ExampleApp,
+    name: "ExampleHandler"
 
   def handle(%AnEvent{..}, _metadata) do
     # ... process the event
@@ -51,7 +53,10 @@ You can choose to start the event handler's event store subscription from the `:
 ```elixir
 defmodule ExampleHandler do
   # Define `start_from` as one of :origin, :current, or an explicit event number (e.g. 1234)
-  use Commanded.Event.Handler, name: "ExampleHandler", start_from: :origin
+  use Commanded.Event.Handler,
+    application: ExampleApp,
+    name: "ExampleHandler",
+    start_from: :origin
 end
 ```
 
@@ -72,6 +77,7 @@ By default event handlers will subscribe to all events appended to any stream. P
 ```elixir
 defmodule ExampleHandler do
   use Commanded.Event.Handler,
+    application: ExampleApp,
     name: __MODULE__,
     subscribe_to: "stream1234"
 end
@@ -87,7 +93,9 @@ This callback function must return `:ok`, any other return value will terminate 
 
 ```elixir
 defmodule ExampleHandler do
-  use Commanded.Event.Handler, name: "ExampleHandler"
+  use Commanded.Event.Handler,
+    application: ExampleApp,
+    name: "ExampleHandler"
 
   def init do
     # optional initialisation
@@ -113,7 +121,9 @@ The default behaviour if you don't provide an `error/3` callback is to stop the 
 
 ```elixir
 defmodule ExampleHandler do
-  use Commanded.Event.Handler, name: __MODULE__
+  use Commanded.Event.Handler,
+    application: ExampleApp,
+    name: __MODULE__
 
   require Logger
 
@@ -151,7 +161,7 @@ end
 The `handle/2` function in your handler receives the domain event and a map of metadata associated with that event. You can provide the metadata key/value pairs when dispatching a command:
 
 ```elixir
-:ok = ExampleRouter.dispatch(command, metadata: %{"issuer_id" => issuer_id, "user_id" => "user@example.com"})
+:ok = ExampleApp.dispatch(command, metadata: %{"issuer_id" => issuer_id, "user_id" => "user@example.com"})
 ```
 
 In addition to the metadata key/values you provide, the following system values will be included in the metadata passed to an event handler:
@@ -162,20 +172,22 @@ In addition to the metadata key/values you provide, the following system values 
 - `stream_version` - the version of the stream for the event.
 - `causation_id` - an optional UUID identifier used to identify which command caused the event.
 - `correlation_id` - an optional UUID identifier used to correlate related commands/events.
-- `created_at` - the date/time, in UTC, indicating when the event was created.
+- `created_at` - the datetime, in UTC, indicating when the event was created.
 
 These key/value metadata pairs will use atom keys to differentiate them from the user provided metadata:
 
 ```elixir
 defmodule ExampleHandler do
-  use Commanded.Event.Handler, name: "ExampleHandler"
+  use Commanded.Event.Handler,
+    application: ExampleApp,
+    name: "ExampleHandler"
 
   def handle(event, metadata) do
     IO.inspect(metadata)
     # %{
     #   :causation_id => "db1ebd30-7d3c-40f7-87cd-12cd9966df32",
     #   :correlation_id => "1599630b-9c38-433c-9548-0dd793108ba0",
-    #   :created_at => ~N[2017-10-30 11:19:56.178901],
+    #   :created_at => #DateTime<2017-10-30 11:19:56.178901Z>,
     #   :event_id => "5e4a0f38-385b-4d57-823b-a1bcf705b7bb",
     #   :event_number => 12345,
     #   :stream_id => "e42a588d-2cda-4314-a471-5d008cce01fc",
@@ -196,6 +208,7 @@ You can specify an event handler's consistency guarantee using the `consistency`
 ```elixir
 defmodule ExampleHandler do
   use Commanded.Event.Handler,
+    application: ExampleApp,
     name: "ExampleHandler",
     consistency: :eventual
 ```
@@ -206,3 +219,60 @@ The available options are `:eventual` (default) and `:strong`:
 - *Eventual consistency* offers low latency but read model queries may reply with stale data since they may not have processed the persisted events.
 
 You request the consistency guarantee, either `:strong` or `:eventual`, when dispatching a command. Strong consistency will block the command dispatch and wait for all strongly consistent event handlers to successfully process all events created by the command. Whereas eventual consistency will immediately return after command dispatch, without waiting for any event handlers, even those configured for strong consistency.
+
+## Upcasting events
+
+Commanded supports upcasting of events at runtime using the `Commanded.Event.Upcaster` protocol.
+
+By implementing the upcaster protocol you can transform an event before it is used by a consumer. This might be an aggregate, an event handler, or a process manager. Because the upcaster changes the event at runtime, handlers only need to support the latest version. You can also use upcasting to change the type of event.
+
+### Examples
+
+Change the shape of an event by renaming a field:
+
+```elixir
+defimpl Commanded.Event.Upcaster, for: AnEvent do
+  def upcast(%AnEvent{} = event, _metadata) do
+    %AnEvent{name: name} = event
+
+    %AnEvent{event | first_name: name}
+  end
+end
+```
+
+Change the type of event by replacing a historical event with a new event:
+
+```elixir
+defimpl Commanded.Event.Upcaster, for: HistoricalEvent do
+  def upcast(%HistoricalEvent{} = event, _metadata) do
+    %HistoricalEvent{id: id, name: name} = event
+
+    %NewEvent{id: id, name: name}
+  end
+end
+```
+
+## Reset an EventHandler
+
+An event handler can be reset (using mix task), it will restart the event store subscription from the configured
+`start_from`. This allow an individual handler to be restart while the app is still running.
+
+You can define a `before_reset/1` method that will be called before resetting the event handler.
+
+```elixir
+defmodule ExampleHandler do
+  use Commanded.Event.Handler,
+    application: ExampleApp,
+    name: __MODULE__
+
+  require Logger
+
+  alias Commanded.Event.FailureContext
+
+  def before_reset do
+    # Do something
+    :ok
+  end
+
+end
+```

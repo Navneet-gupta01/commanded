@@ -29,22 +29,27 @@ defmodule Commanded.Aggregates.Aggregate do
 
   ### Example
 
-  In `config/config.exs` enable snapshots for `ExampleAggregate` after every ten
-  events:
+  In `config/config.exs` enable snapshots for `MyApp.ExampleAggregate` after
+  every ten events:
 
-      config :commanded, ExampleAggregate,
-        snapshot_every: 10,
-        snapshot_version: 1
+      config :my_app, MyApp.Application,
+        snapshotting: %{
+          MyApp.ExampleAggregate => [
+            snapshot_every: 10,
+            snapshot_version: 1
+          ]
+        }
 
   """
 
-  use GenServer
+  use GenServer, restart: :temporary
   use Commanded.Registration
 
   require Logger
 
   alias Commanded.Aggregates.{Aggregate, ExecutionContext}
   alias Commanded.Event.Mapper
+  alias Commanded.Event.Upcast
   alias Commanded.EventStore
   alias Commanded.EventStore.{RecordedEvent, SnapshotData}
   alias Commanded.Snapshotting
@@ -52,6 +57,7 @@ defmodule Commanded.Aggregates.Aggregate do
   @read_event_batch_size 100
 
   defstruct [
+    :application,
     :aggregate_module,
     :aggregate_uuid,
     :aggregate_state,
@@ -60,33 +66,41 @@ defmodule Commanded.Aggregates.Aggregate do
     lifespan_timeout: :infinity
   ]
 
-  def start_link(aggregate_module, aggregate_uuid, opts \\ [])
-      when is_atom(aggregate_module) and is_binary(aggregate_uuid) do
+  def start_link(config, args) do
+    aggregate_module = Keyword.fetch!(args, :aggregate_module)
+    aggregate_uuid = Keyword.fetch!(args, :aggregate_uuid)
+
+    unless is_atom(aggregate_module) and is_binary(aggregate_uuid) do
+      raise "aggregate_module must be an atom and aggregate_uuid must be a string"
+    end
+
+    application = Keyword.fetch!(config, :application)
+    snapshotting = Keyword.get(config, :snapshotting, %{})
+    snapshot_options = Map.get(snapshotting, aggregate_module, [])
+
     aggregate = %Aggregate{
+      application: application,
       aggregate_module: aggregate_module,
       aggregate_uuid: aggregate_uuid,
-      snapshotting: Snapshotting.new(aggregate_uuid, snapshot_options(aggregate_module))
+      snapshotting: Snapshotting.new(application, aggregate_uuid, snapshot_options)
     }
+
+    opts = [name: args[:name]]
 
     GenServer.start_link(__MODULE__, aggregate, opts)
   end
 
   @doc false
-  def name(aggregate_module, aggregate_uuid)
-      when is_atom(aggregate_module) and is_binary(aggregate_uuid),
-      do: {aggregate_module, aggregate_uuid}
+  def name(application, aggregate_module, aggregate_uuid)
+      when is_atom(application) and is_atom(aggregate_module) and is_binary(aggregate_uuid),
+      do: {application, aggregate_module, aggregate_uuid}
 
   @doc false
+  @impl GenServer
   def init(%Aggregate{} = state) do
     # Initial aggregate state is populated by loading its state snapshot and/or
     # events from the event store.
-    :ok = GenServer.cast(self(), :populate_aggregate_state)
-
-    # Subscribe to aggregate's events to catch any events appended to its stream
-    # by another process, such as directly appended to the event store.
-    :ok = GenServer.cast(self(), :subscribe_to_events)
-
-    {:ok, state}
+    {:ok, state, {:continue, :populate_aggregate_state}}
   end
 
   @doc """
@@ -110,51 +124,62 @@ defmodule Commanded.Aggregates.Aggregate do
     - `events` - events produced by the command, can be an empty list.
 
   """
-  def execute(aggregate_module, aggregate_uuid, %ExecutionContext{} = context, timeout \\ 5_000)
+  def execute(
+        application,
+        aggregate_module,
+        aggregate_uuid,
+        %ExecutionContext{} = context,
+        timeout \\ 5_000
+      )
       when is_atom(aggregate_module) and is_binary(aggregate_uuid) and
              (is_number(timeout) or timeout == :infinity) do
-    GenServer.call(
-      via_name(aggregate_module, aggregate_uuid),
-      {:execute_command, context},
-      timeout
-    )
+    name = via_name(application, aggregate_module, aggregate_uuid)
+    GenServer.call(name, {:execute_command, context}, timeout)
   end
 
   @doc false
-  def aggregate_state(aggregate_module, aggregate_uuid, timeout \\ 5_000) do
-    GenServer.call(via_name(aggregate_module, aggregate_uuid), :aggregate_state, timeout)
+  def aggregate_state(application, aggregate_module, aggregate_uuid, timeout \\ 5_000) do
+    name = via_name(application, aggregate_module, aggregate_uuid)
+    GenServer.call(name, :aggregate_state, timeout)
   end
 
   @doc false
-  def aggregate_version(aggregate_module, aggregate_uuid, timeout \\ 5_000) do
-    GenServer.call(via_name(aggregate_module, aggregate_uuid), :aggregate_version, timeout)
+  def aggregate_version(application, aggregate_module, aggregate_uuid, timeout \\ 5_000) do
+    name = via_name(application, aggregate_module, aggregate_uuid)
+    GenServer.call(name, :aggregate_version, timeout)
   end
 
   @doc false
-  def take_snapshot(aggregate_module, aggregate_uuid) do
-    GenServer.cast(via_name(aggregate_module, aggregate_uuid), :take_snapshot)
+  def take_snapshot(application, aggregate_module, aggregate_uuid) do
+    name = via_name(application, aggregate_module, aggregate_uuid)
+    GenServer.cast(name, :take_snapshot)
   end
 
   @doc false
-  def shutdown(aggregate_module, aggregate_uuid) do
-    GenServer.stop(via_name(aggregate_module, aggregate_uuid))
+  def shutdown(application, aggregate_module, aggregate_uuid) do
+    name = via_name(application, aggregate_module, aggregate_uuid)
+    GenServer.stop(name)
   end
 
   @doc false
-  def handle_cast(:populate_aggregate_state, %Aggregate{} = state) do
-    {:noreply, populate_aggregate_state(state)}
+  def handle_continue(:populate_aggregate_state, %Aggregate{} = state) do
+    # Subscribe to aggregate's events to catch any events appended to its stream
+    # by another process, such as directly appended to the event store.
+    {:noreply, populate_aggregate_state(state), {:continue, :subscribe_to_events}}
   end
 
   @doc false
-  def handle_cast(:subscribe_to_events, %Aggregate{} = state) do
-    %Aggregate{aggregate_uuid: aggregate_uuid} = state
+  @impl GenServer
+  def handle_continue(:subscribe_to_events, %Aggregate{} = state) do
+    %Aggregate{application: application, aggregate_uuid: aggregate_uuid} = state
 
-    :ok = EventStore.subscribe(aggregate_uuid)
+    :ok = EventStore.subscribe(application, aggregate_uuid)
 
     {:noreply, state}
   end
 
   @doc false
+  @impl GenServer
   def handle_cast(:take_snapshot, %Aggregate{} = state) do
     %Aggregate{
       aggregate_state: aggregate_state,
@@ -186,6 +211,7 @@ defmodule Commanded.Aggregates.Aggregate do
   end
 
   @doc false
+  @impl GenServer
   def handle_call({:execute_command, %ExecutionContext{} = context}, _from, %Aggregate{} = state) do
     %ExecutionContext{lifespan: lifespan, command: command} = context
 
@@ -220,6 +246,7 @@ defmodule Commanded.Aggregates.Aggregate do
   end
 
   @doc false
+  @impl GenServer
   def handle_call(:aggregate_state, _from, %Aggregate{} = state) do
     %Aggregate{aggregate_state: aggregate_state} = state
 
@@ -227,6 +254,7 @@ defmodule Commanded.Aggregates.Aggregate do
   end
 
   @doc false
+  @impl GenServer
   def handle_call(:aggregate_version, _from, %Aggregate{} = state) do
     %Aggregate{aggregate_version: aggregate_version} = state
 
@@ -234,12 +262,18 @@ defmodule Commanded.Aggregates.Aggregate do
   end
 
   @doc false
+  @impl GenServer
   def handle_info({:events, events}, %Aggregate{} = state) do
     %Aggregate{lifespan_timeout: lifespan_timeout} = state
 
     Logger.debug(fn -> describe(state) <> " received events: #{inspect(events)}" end)
 
     try do
+      state =
+        events
+        |> Upcast.upcast_event_stream()
+        |> Enum.reduce(state, &handle_event/2)
+
       state = Enum.reduce(events, state, &handle_event/2)
 
       {:noreply, state, lifespan_timeout}
@@ -253,6 +287,7 @@ defmodule Commanded.Aggregates.Aggregate do
   end
 
   @doc false
+  @impl GenServer
   def handle_info(:timeout, %Aggregate{} = state) do
     Logger.debug(fn -> describe(state) <> " stopping due to inactivity timeout" end)
 
@@ -323,9 +358,18 @@ defmodule Commanded.Aggregates.Aggregate do
 
   # Load events from the event store, in batches, to rebuild the aggregate state
   defp rebuild_from_events(%Aggregate{} = state) do
-    %Aggregate{aggregate_uuid: aggregate_uuid, aggregate_version: aggregate_version} = state
+    %Aggregate{
+      application: application,
+      aggregate_uuid: aggregate_uuid,
+      aggregate_version: aggregate_version
+    } = state
 
-    case EventStore.stream_forward(aggregate_uuid, aggregate_version + 1, @read_event_batch_size) do
+    case EventStore.stream_forward(
+           application,
+           aggregate_uuid,
+           aggregate_version + 1,
+           @read_event_batch_size
+         ) do
       {:error, :stream_not_found} ->
         # aggregate does not exist, return initial state
         state
@@ -401,11 +445,7 @@ defmodule Commanded.Aggregates.Aggregate do
       retry_attempts: retry_attempts
     } = context
 
-    %Aggregate{
-      aggregate_module: aggregate_module,
-      aggregate_version: expected_version,
-      aggregate_state: aggregate_state
-    } = state
+    %Aggregate{aggregate_version: expected_version, aggregate_state: aggregate_state} = state
 
     Logger.debug(fn -> describe(state) <> " executing command: #{inspect(command)}" end)
 
@@ -414,7 +454,7 @@ defmodule Commanded.Aggregates.Aggregate do
         {:error, _error} = reply ->
           {reply, state}
 
-        none when none in [nil, []] ->
+        none when none in [:ok, nil, []] ->
           {{:ok, expected_version, []}, state}
 
         %Commanded.Aggregate.Multi{} = multi ->
@@ -426,11 +466,11 @@ defmodule Commanded.Aggregates.Aggregate do
               persist_events(pending_events, aggregate_state, context, state)
           end
 
-        events ->
-          pending_events = List.wrap(events)
-          aggregate_state = apply_events(aggregate_module, aggregate_state, pending_events)
+        {:ok, pending_events} ->
+          record_events(pending_events, context, state)
 
-          persist_events(pending_events, aggregate_state, context, state)
+        pending_events ->
+          record_events(pending_events, context, state)
       end
 
     case reply do
@@ -448,14 +488,23 @@ defmodule Commanded.Aggregates.Aggregate do
     end
   end
 
+  defp record_events(pending_events, context, %Aggregate{} = state) do
+    %Aggregate{aggregate_module: aggregate_module, aggregate_state: aggregate_state} = state
+
+    pending_events = List.wrap(pending_events)
+    aggregate_state = apply_events(aggregate_module, aggregate_state, pending_events)
+
+    persist_events(pending_events, aggregate_state, context, state)
+  end
+
   defp apply_events(aggregate_module, aggregate_state, events) do
     Enum.reduce(events, aggregate_state, &aggregate_module.apply(&2, &1))
   end
 
   defp persist_events(pending_events, aggregate_state, context, %Aggregate{} = state) do
-    %Aggregate{aggregate_uuid: aggregate_uuid, aggregate_version: expected_version} = state
+    %Aggregate{aggregate_version: expected_version} = state
 
-    with :ok <- append_to_stream(pending_events, aggregate_uuid, expected_version, context) do
+    with :ok <- append_to_stream(pending_events, context, state) do
       aggregate_version = expected_version + length(pending_events)
 
       state = %Aggregate{
@@ -471,9 +520,15 @@ defmodule Commanded.Aggregates.Aggregate do
     end
   end
 
-  defp append_to_stream([], _stream_uuid, _expected_version, _context), do: :ok
+  defp append_to_stream([], _context, _state), do: :ok
 
-  defp append_to_stream(pending_events, stream_uuid, expected_version, context) do
+  defp append_to_stream(pending_events, %ExecutionContext{} = context, %Aggregate{} = state) do
+    %Aggregate{
+      application: application,
+      aggregate_uuid: aggregate_uuid,
+      aggregate_version: expected_version
+    } = state
+
     %ExecutionContext{
       causation_id: causation_id,
       correlation_id: correlation_id,
@@ -487,15 +542,13 @@ defmodule Commanded.Aggregates.Aggregate do
         metadata: metadata
       )
 
-    EventStore.append_to_stream(stream_uuid, expected_version, event_data)
+    EventStore.append_to_stream(application, aggregate_uuid, expected_version, event_data)
   end
 
-  # get the snapshot options for the aggregate defined in environment config.
-  defp snapshot_options(aggregate_module),
-    do: Application.get_env(:commanded, aggregate_module, [])
-
-  defp via_name(aggregate_module, aggregate_uuid),
-    do: name(aggregate_module, aggregate_uuid) |> via_tuple()
+  defp via_name(application, aggregate_module, aggregate_uuid) do
+    name = name(application, aggregate_module, aggregate_uuid)
+    via_tuple(application, name)
+  end
 
   defp describe(%Aggregate{} = aggregate) do
     %Aggregate{

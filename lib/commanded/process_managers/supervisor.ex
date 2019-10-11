@@ -1,40 +1,20 @@
 defmodule Commanded.ProcessManagers.Supervisor do
   @moduledoc false
 
-  use Supervisor
+  use DynamicSupervisor
 
-  require Logger
+  alias Commanded.ProcessManagers.ProcessManagerInstance
 
-  def start_link(command_dispatcher, process_router) do
-    Supervisor.start_link(__MODULE__, [command_dispatcher, process_router])
+  def start_link do
+    DynamicSupervisor.start_link(__MODULE__, [])
   end
 
-  def start_process_manager(
-        supervisor,
-        process_manager_name,
-        process_manager_module,
-        process_uuid
-      ) do
-    Logger.debug(fn ->
-      "Starting process manager process for `#{process_manager_module}` with uuid #{process_uuid}"
-    end)
-
-    Supervisor.start_child(supervisor, [
-      process_manager_name,
-      process_manager_module,
-      process_uuid
-    ])
+  def start_process_manager(supervisor, opts) do
+    DynamicSupervisor.start_child(supervisor, {ProcessManagerInstance, opts})
   end
 
-  def init([command_dispatcher, process_router]) do
-    children = [
-      worker(
-        Commanded.ProcessManagers.ProcessManagerInstance,
-        [command_dispatcher, process_router],
-        restart: :temporary
-      )
-    ]
-
-    supervise(children, strategy: :simple_one_for_one)
+  @impl true
+  def init(_init_arg) do
+    DynamicSupervisor.init(strategy: :one_for_one)
   end
 end

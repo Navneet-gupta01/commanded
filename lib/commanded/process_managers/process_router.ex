@@ -6,6 +6,7 @@ defmodule Commanded.ProcessManagers.ProcessRouter do
 
   require Logger
 
+  alias Commanded.Event.Upcast
   alias Commanded.EventStore
   alias Commanded.EventStore.RecordedEvent
   alias Commanded.ProcessManagers.FailureContext
@@ -18,9 +19,10 @@ defmodule Commanded.ProcessManagers.ProcessRouter do
     @moduledoc false
 
     defstruct [
-      :command_dispatcher,
+      :application,
       :consistency,
       :event_timeout,
+      :idle_timeout,
       :process_manager_name,
       :process_manager_module,
       :subscribe_from,
@@ -35,25 +37,27 @@ defmodule Commanded.ProcessManagers.ProcessRouter do
     ]
   end
 
-  def start_link(process_manager_name, process_manager_module, command_dispatcher, opts \\ []) do
-    name = {ProcessRouter, process_manager_name}
+  def start_link(application, name, module, opts \\ []) do
+    name = {application, ProcessRouter, name}
 
     state = %State{
-      process_manager_name: process_manager_name,
-      process_manager_module: process_manager_module,
-      command_dispatcher: command_dispatcher,
-      consistency: opts[:consistency] || :eventual,
-      subscribe_from: opts[:start_from] || :origin,
-      event_timeout: opts[:event_timeout]
+      application: application,
+      process_manager_name: name,
+      process_manager_module: module,
+      consistency: Keyword.get(opts, :consistency, :eventual),
+      subscribe_from: Keyword.get(opts, :start_from, :origin),
+      event_timeout: Keyword.get(opts, :event_timeout),
+      idle_timeout: Keyword.get(opts, :idle_timeout, :infinity)
     }
 
-    Registration.start_link(name, __MODULE__, state)
+    Registration.start_link(application, name, __MODULE__, state)
   end
 
+  @impl GenServer
   def init(%State{} = state) do
-    :ok = GenServer.cast(self(), :subscribe_to_events)
+    :ok = register_subscription(state)
 
-    {:ok, state}
+    {:ok, state, {:continue, :subscribe_to_events}}
   end
 
   @doc """
@@ -74,6 +78,13 @@ defmodule Commanded.ProcessManagers.ProcessRouter do
   end
 
   @doc false
+  @impl GenServer
+  def handle_continue(:subscribe_to_events, %State{} = state) do
+    {:noreply, subscribe_to_events(state)}
+  end
+
+  @doc false
+  @impl GenServer
   def handle_call(:process_instances, _from, %State{} = state) do
     %State{process_managers: process_managers} = state
 
@@ -83,6 +94,7 @@ defmodule Commanded.ProcessManagers.ProcessRouter do
   end
 
   @doc false
+  @impl GenServer
   def handle_call({:process_instance, process_uuid}, _from, %State{} = state) do
     %State{process_managers: process_managers} = state
 
@@ -96,6 +108,7 @@ defmodule Commanded.ProcessManagers.ProcessRouter do
   end
 
   @doc false
+  @impl GenServer
   def handle_cast({:ack_event, event, instance}, %State{} = state) do
     %State{pending_acks: pending_acks} = state
     %RecordedEvent{event_number: event_number} = event
@@ -120,15 +133,12 @@ defmodule Commanded.ProcessManagers.ProcessRouter do
   end
 
   @doc false
-  def handle_cast(:subscribe_to_events, %State{} = state) do
-    {:noreply, subscribe_to_all_streams(state)}
-  end
-
-  @doc false
+  @impl GenServer
   def handle_cast(:process_pending_events, %State{pending_events: []} = state),
     do: {:noreply, state}
 
   @doc false
+  @impl GenServer
   def handle_cast(:process_pending_events, %State{} = state) do
     %State{pending_events: [event | pending_events]} = state
 
@@ -151,30 +161,26 @@ defmodule Commanded.ProcessManagers.ProcessRouter do
 
   @doc false
   # Subscription to event store has successfully subscribed, init process router
+  @impl GenServer
   def handle_info({:subscribed, subscription}, %State{subscription: subscription} = state) do
     Logger.debug(fn -> describe(state) <> " has successfully subscribed to event store" end)
 
-    %State{
-      consistency: consistency,
-      command_dispatcher: command_dispatcher,
-      process_manager_name: process_manager_name
-    } = state
-
-    # Register this process manager as a subscription with the given consistency
-    :ok = Subscriptions.register(process_manager_name, consistency)
-
-    {:ok, supervisor} = Supervisor.start_link(command_dispatcher, self())
+    {:ok, supervisor} = Supervisor.start_link()
 
     {:noreply, %State{state | supervisor: supervisor}}
   end
 
   @doc false
+  @impl GenServer
   def handle_info({:events, events}, %State{} = state) do
-    Logger.debug(fn -> describe(state) <> " received #{length(events)} event(s)" end)
-
     %State{pending_events: pending_events} = state
 
-    unseen_events = Enum.reject(events, &event_already_seen?(&1, state))
+    Logger.debug(fn -> describe(state) <> " received #{length(events)} event(s)" end)
+
+    unseen_events =
+      events
+      |> Enum.reject(&event_already_seen?(&1, state))
+      |> Upcast.upcast_event_stream()
 
     state =
       case {pending_events, unseen_events} do
@@ -198,6 +204,7 @@ defmodule Commanded.ProcessManagers.ProcessRouter do
 
   @doc false
   # Shutdown process manager when processing an event has taken too long.
+  @impl GenServer
   def handle_info({:event_timeout, event_number}, %State{} = state) do
     %State{pending_acks: pending_acks, event_timeout: event_timeout} = state
 
@@ -219,6 +226,7 @@ defmodule Commanded.ProcessManagers.ProcessRouter do
 
   @doc false
   # Stop process manager when event store subscription process terminates.
+  @impl GenServer
   def handle_info(
         {:DOWN, ref, :process, pid, reason},
         %State{subscription_ref: ref, subscription: pid} = state
@@ -230,6 +238,7 @@ defmodule Commanded.ProcessManagers.ProcessRouter do
 
   @doc false
   # Remove a process manager instance that has stopped with a normal exit reason.
+  @impl GenServer
   def handle_info({:DOWN, _ref, :process, pid, :normal}, %State{} = state) do
     %State{process_managers: process_managers} = state
 
@@ -240,17 +249,29 @@ defmodule Commanded.ProcessManagers.ProcessRouter do
 
   @doc false
   # Stop process router when a process manager instance terminates abnormally.
+  @impl GenServer
   def handle_info({:DOWN, _ref, :process, _pid, reason}, %State{} = state) do
     Logger.warn(fn -> describe(state) <> " is stopping due to: #{inspect(reason)}" end)
 
     {:stop, reason, state}
   end
 
-  defp subscribe_to_all_streams(%State{} = state) do
-    %State{process_manager_name: process_manager_name, subscribe_from: subscribe_from} = state
+  # Register this process manager as a subscription with the given consistency
+  defp register_subscription(%State{} = state) do
+    %State{application: application, consistency: consistency, process_manager_name: name} = state
+
+    Subscriptions.register(application, name, consistency)
+  end
+
+  defp subscribe_to_events(%State{} = state) do
+    %State{
+      application: application,
+      process_manager_name: process_manager_name,
+      subscribe_from: subscribe_from
+    } = state
 
     {:ok, subscription} =
-      EventStore.subscribe_to(:all, process_manager_name, self(), subscribe_from)
+      EventStore.subscribe_to(application, :all, process_manager_name, self(), subscribe_from)
 
     subscription_ref = Process.monitor(subscription)
 
@@ -430,21 +451,26 @@ defmodule Commanded.ProcessManagers.ProcessRouter do
 
   defp start_process_manager(process_uuid, %State{} = state) do
     %State{
+      application: application,
+      idle_timeout: idle_timeout,
       process_managers: process_managers,
       process_manager_name: process_manager_name,
       process_manager_module: process_manager_module,
       supervisor: supervisor
     } = state
 
-    {:ok, process_manager} =
-      Supervisor.start_process_manager(
-        supervisor,
-        process_manager_name,
-        process_manager_module,
-        process_uuid
-      )
+    opts = [
+      application: application,
+      idle_timeout: idle_timeout,
+      process_manager_name: process_manager_name,
+      process_manager_module: process_manager_module,
+      process_router: self(),
+      process_uuid: process_uuid
+    ]
 
-    Process.monitor(process_manager)
+    {:ok, process_manager} = Supervisor.start_process_manager(supervisor, opts)
+
+    _ref = Process.monitor(process_manager)
 
     state = %State{
       state
@@ -479,11 +505,15 @@ defmodule Commanded.ProcessManagers.ProcessRouter do
   end
 
   defp do_ack_event(event, %State{} = state) do
-    %State{consistency: consistency, process_manager_name: name, subscription: subscription} =
-      state
+    %State{
+      application: application,
+      consistency: consistency,
+      process_manager_name: name,
+      subscription: subscription
+    } = state
 
-    :ok = EventStore.ack_event(subscription, event)
-    :ok = Subscriptions.ack_event(name, consistency, event)
+    :ok = EventStore.ack_event(application, subscription, event)
+    :ok = Subscriptions.ack_event(application, name, consistency, event)
   end
 
   # Delegate event to process instance who will ack event processing on success
