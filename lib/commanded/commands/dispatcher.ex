@@ -36,9 +36,14 @@ defmodule Commanded.Commands.Dispatcher do
   @doc """
   Dispatch the given command to the handler module for the aggregate as identified
 
-  Returns `:ok` on success, or `{:error, error}` on failure.
+  Returns `:ok`, `{:ok, aggregate_version}` or 
+  `{:ok, %Commanded.Commands.ExecutionResult{}}` on success, or `{:error, error}`
+  on failure.
   """
-  @spec dispatch(payload :: struct) :: :ok | {:error, error :: term}
+  @spec dispatch(payload :: struct) :: :ok |
+    {:ok, Commanded.Commands.ExecutionResult.t()} |
+    {:ok, aggregate_version :: integer()} |
+    {:error, error :: term}
   def dispatch(%Payload{} = payload) do
     pipeline =
       payload
@@ -47,8 +52,10 @@ defmodule Commanded.Commands.Dispatcher do
 
     # Stop command execution if pipeline has been halted
     unless Pipeline.halted?(pipeline) do
+      context = to_execution_context(pipeline, payload)
+
       pipeline
-      |> execute(payload)
+      |> execute(payload, context)
       |> Pipeline.response()
     else
       pipeline
@@ -60,7 +67,7 @@ defmodule Commanded.Commands.Dispatcher do
   defp to_pipeline(%Payload{} = payload),
     do: struct(Pipeline, Map.from_struct(payload))
 
-  defp execute(%Pipeline{} = pipeline, %Payload{} = payload) do
+  defp execute(%Pipeline{} = pipeline, %Payload{} = payload, %ExecutionContext{} = context) do
     %Pipeline{assigns: %{aggregate_uuid: aggregate_uuid}} = pipeline
 
     %Payload{application: application, aggregate_module: aggregate_module, timeout: timeout} =
@@ -72,8 +79,6 @@ defmodule Commanded.Commands.Dispatcher do
         aggregate_module,
         aggregate_uuid
       )
-
-    context = to_execution_context(pipeline, payload)
 
     task_dispatcher_name = Module.concat([application, Commanded.Commands.TaskDispatcher])
 
@@ -88,8 +93,9 @@ defmodule Commanded.Commands.Dispatcher do
 
     result =
       case Task.yield(task, timeout) || Task.shutdown(task) do
-        {:ok, reply} -> reply
-        {:exit, error} -> {:error, :aggregate_execution_failed, error}
+        {:ok, result} -> result
+        {:exit, {:normal, :aggregate_stopped}} = result -> result
+        {:exit, _reason} -> {:error, :aggregate_execution_failed}
         nil -> {:error, :aggregate_execution_timeout}
       end
 
@@ -100,6 +106,16 @@ defmodule Commanded.Commands.Dispatcher do
         |> Pipeline.assign(:events, events)
         |> after_dispatch(payload)
         |> respond_with_success(payload, events)
+
+      {:exit, {:normal, :aggregate_stopped}} ->
+        # Maybe retry command when aggregate process stopped by lifespan timeout
+        case ExecutionContext.retry(context) do
+          {:ok, context} ->
+            execute(pipeline, payload, context)
+
+          reply ->
+            reply
+        end
 
       {:error, error} ->
         pipeline

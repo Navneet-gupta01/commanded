@@ -2,9 +2,33 @@
 
 ## Next release
 
+### Bug fixes
+
+- Fixes the typespec for command dispatch ([#325](https://github.com/commanded/commanded/pull/325)).
+
+## v1.0.0
+
 ### Breaking changes
 
 - Support multiple Commanded apps ([#298](https://github.com/commanded/commanded/pull/298)).
+
+### Enhancements
+
+- Define adapter behaviour modules for event store, pubsub, and registry ([#311](https://github.com/commanded/commanded/pull/311)).
+- Add `AggregateCase` ExUnit case template to support aggregate unit testing ([#315](https://github.com/commanded/commanded/pull/315)).
+- Application config lookup ([#318](https://github.com/commanded/commanded/pull/318)).
+
+### Bug fixes
+
+- Fix process manager exception on start ([#307](https://github.com/commanded/commanded/pull/307)).
+- Fix commanded aggregate race ([#308](https://github.com/commanded/commanded/pull/308)).
+- Fix Dialyzer warnings and include in Travis CI ([#317](https://github.com/commanded/commanded/pull/317)).
+
+### Upgrading
+
+[Follow the upgrade guide](https://hexdocs.pm/commanded/1.0.0/0.19-1.0.html) to define and use your own Commanded application.
+
+---
 
 ## v0.19.1
 
@@ -71,7 +95,7 @@
 - Fix typo in `include_execution_result` global router option ([#216](https://github.com/commanded/commanded/pull/216)).
 - Handle the `{:ok, _}` tuple dispatch result in process manager command dispatch ([#236](https://github.com/commanded/commanded/pull/236)).
 - Allow string keys for `Commanded.Middleware.Pipeline.assign_metadata/3`, atoms are being deprecated ([#228](https://github.com/commanded/commanded/pull/228))
-- Fix `Commanded.PubSub.subscribe/1` typespec ([#222](https://github.com/commanded/commanded/pull/222)).
+- Fix `Commanded.PubSub.subscribe` typespec ([#222](https://github.com/commanded/commanded/pull/222)).
 
 ### Breaking changes
 

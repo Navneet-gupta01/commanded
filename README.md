@@ -19,13 +19,15 @@ You can use Commanded with one of the following event stores for persistence:
 
 Please refer to the [CHANGELOG](CHANGELOG.md) for features, bug fixes, and any upgrade advice included for each release.
 
+Requires Erlang/OTP v21.0 and Elixir v1.6 or later.
+
 ---
 
 ### Supporting Commanded
 
 You can help support Commanded by helping to fund its ongoing development, new features, and releases.
 
-- [Become a backer or sponsor on OpenCollective](https://opencollective.com/commanded).
+- [Become a GitHub sponsor](https://github.com/sponsors/slashdotdash).
 - [View sponsors & backers](BACKERS.md)
 
 ---
@@ -143,6 +145,7 @@ Commanded exists thanks to the following people who have contributed.
 - [JC](https://github.com/jccf091)
 - [Joan Zapata](https://github.com/JoanZapata)
 - [João Thallis](https://github.com/joaothallis)
+- [John Wilger](https://github.com/jwilger)
 - [Kok J Sam](https://github.com/sammkj)
 - [Leif Gensert](https://github.com/leifg)
 - [Luís Ferreira](https://github.com/zamith)
@@ -150,6 +153,7 @@ Commanded exists thanks to the following people who have contributed.
 - [Miguel Palhas](https://github.com/naps62)
 - [Nigel Thorne](https://github.com/nigelthorne)
 - [Olafur Arason](https://github.com/olafura)
+- [Paolo Laurenti](https://github.com/PaoloLaurenti)
 - [Patrick Detlefsen](https://github.com/patrickdet)
 - [Phil Chen](https://github.com/fahchen)
 - [Raphaël Lustin](https://github.com/rlustin)

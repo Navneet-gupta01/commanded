@@ -8,7 +8,7 @@ You must decide which event store to use with Commanded. You have a choice betwe
 
 There is also an [in-memory event store adapter](https://github.com/commanded/commanded/wiki/In-memory-event-store) for *test use only*.
 
-Want to use a different event store? Then you will need to [write your own event store provider](#writing-your-own-event-store-provider).
+Want to use a different event store? Then you will need to write your own event store provider as described below.
 
 ---
 
@@ -36,6 +36,6 @@ Use the `--run-projections=all --start-standard-projections=true` flags when run
 
 ## Writing your own event store provider
 
-To use an alternative event store with Commanded you will need to implement the `Commanded.EventStore` behaviour. This defines the contract to be implemented by an adapter module to allow an event store to be used with Commanded. Tests to verify an adapter conforms to the behaviour are provided in `test/event_store_adapter`.
+To use an alternative event store with Commanded you will need to implement the `Commanded.EventStore.Adapter` behaviour. This defines the contract to be implemented by an adapter module to allow an event store to be used with Commanded. Tests to verify an adapter conforms to the behaviour are provided in `test/event_store_adapter`.
 
 You can use one of the existing adapters ([commanded_eventstore_adapter](https://github.com/commanded/commanded-eventstore-adapter) or [commanded_extreme_adapter](https://github.com/commanded/commanded-extreme-adapter)) to understand what is required.

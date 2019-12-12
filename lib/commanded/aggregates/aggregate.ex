@@ -52,6 +52,7 @@ defmodule Commanded.Aggregates.Aggregate do
   alias Commanded.Event.Upcast
   alias Commanded.EventStore
   alias Commanded.EventStore.{RecordedEvent, SnapshotData}
+  alias Commanded.Registration
   alias Commanded.Snapshotting
 
   @read_event_batch_size 100
@@ -95,14 +96,6 @@ defmodule Commanded.Aggregates.Aggregate do
       when is_atom(application) and is_atom(aggregate_module) and is_binary(aggregate_uuid),
       do: {application, aggregate_module, aggregate_uuid}
 
-  @doc false
-  @impl GenServer
-  def init(%Aggregate{} = state) do
-    # Initial aggregate state is populated by loading its state snapshot and/or
-    # events from the event store.
-    {:ok, state, {:continue, :populate_aggregate_state}}
-  end
-
   @doc """
   Execute the given command against the aggregate.
 
@@ -134,7 +127,13 @@ defmodule Commanded.Aggregates.Aggregate do
       when is_atom(aggregate_module) and is_binary(aggregate_uuid) and
              (is_number(timeout) or timeout == :infinity) do
     name = via_name(application, aggregate_module, aggregate_uuid)
-    GenServer.call(name, {:execute_command, context}, timeout)
+
+    try do
+      GenServer.call(name, {:execute_command, context}, timeout)
+    catch
+      :exit, {:normal, {GenServer, :call, [^name, {:execute_command, ^context}, ^timeout]}} ->
+        {:exit, {:normal, :aggregate_stopped}}
+    end
   end
 
   @doc false
@@ -162,6 +161,15 @@ defmodule Commanded.Aggregates.Aggregate do
   end
 
   @doc false
+  @impl GenServer
+  def init(%Aggregate{} = state) do
+    # Initial aggregate state is populated by loading its state snapshot and/or
+    # events from the event store.
+    {:ok, state, {:continue, :populate_aggregate_state}}
+  end
+
+  @doc false
+  @impl GenServer
   def handle_continue(:populate_aggregate_state, %Aggregate{} = state) do
     # Subscribe to aggregate's events to catch any events appended to its stream
     # by another process, such as directly appended to the event store.
@@ -433,18 +441,8 @@ defmodule Commanded.Aggregates.Aggregate do
     end
   end
 
-  defp execute_command(%ExecutionContext{retry_attempts: retry_attempts}, %Aggregate{} = state)
-       when retry_attempts < 0,
-       do: {{:error, :too_many_attempts}, state}
-
   defp execute_command(%ExecutionContext{} = context, %Aggregate{} = state) do
-    %ExecutionContext{
-      command: command,
-      handler: handler,
-      function: function,
-      retry_attempts: retry_attempts
-    } = context
-
+    %ExecutionContext{command: command, handler: handler, function: function} = context
     %Aggregate{aggregate_version: expected_version, aggregate_state: aggregate_state} = state
 
     Logger.debug(fn -> describe(state) <> " executing command: #{inspect(command)}" end)
@@ -475,13 +473,23 @@ defmodule Commanded.Aggregates.Aggregate do
 
     case reply do
       {:error, :wrong_expected_version} ->
-        Logger.debug(fn -> describe(state) <> " wrong expected version, retrying command" end)
-
-        # fetch missing events from event store
+        # Fetch missing events from event store
         state = rebuild_from_events(state)
 
-        # retry command, but decrement retry attempts (to prevent infinite retries)
-        execute_command(%ExecutionContext{context | retry_attempts: retry_attempts - 1}, state)
+        # Retry command if there are any attempts left
+        case ExecutionContext.retry(context) do
+          {:ok, context} ->
+            Logger.debug(fn -> describe(state) <> " wrong expected version, retrying command" end)
+
+            execute_command(context, state)
+
+          reply ->
+            Logger.debug(fn ->
+              describe(state) <> " wrong expected version, but not retrying command"
+            end)
+
+            {reply, state}
+        end
 
       reply ->
         {reply, state}
@@ -547,7 +555,8 @@ defmodule Commanded.Aggregates.Aggregate do
 
   defp via_name(application, aggregate_module, aggregate_uuid) do
     name = name(application, aggregate_module, aggregate_uuid)
-    via_tuple(application, name)
+
+    Registration.via_tuple(application, name)
   end
 
   defp describe(%Aggregate{} = aggregate) do

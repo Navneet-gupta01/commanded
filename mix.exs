@@ -1,7 +1,7 @@
 defmodule Commanded.Mixfile do
   use Mix.Project
 
-  @version "0.19.1"
+  @version "1.0.0"
 
   def project do
     [
@@ -17,6 +17,7 @@ defmodule Commanded.Mixfile do
       build_embedded: Mix.env() == :prod,
       start_permanent: Mix.env() == :prod,
       consolidate_protocols: Mix.env() == :prod,
+      dialyzer: dialyzer(),
       name: "Commanded",
       source_url: "https://github.com/commanded/commanded"
     ]
@@ -29,7 +30,7 @@ defmodule Commanded.Mixfile do
     ]
   end
 
-  defp elixirc_paths(:test),
+  defp elixirc_paths(env) when env in [:bench, :test],
     do: [
       "lib",
       "test/aggregates/support",
@@ -52,15 +53,16 @@ defmodule Commanded.Mixfile do
     [
       {:elixir_uuid, "~> 1.2"},
 
-      # Build and test tools
-      {:dialyxir, "~> 0.5", only: :dev, runtime: false},
-      {:ex_doc, "~> 0.20", only: :dev},
-      {:mix_test_watch, "~> 0.9", only: :dev},
-      {:mox, "~> 0.5", only: :test},
-
       # Optional dependencies
       {:jason, "~> 1.1", optional: true},
-      {:phoenix_pubsub, "~> 1.1", optional: true}
+      {:phoenix_pubsub, "~> 1.1", optional: true},
+
+      # Build and test tools
+      {:benchfella, "~> 0.3", only: :bench},
+      {:dialyxir, "~> 1.0.0-rc.7", only: :dev, runtime: false},
+      {:ex_doc, "~> 0.21", only: :dev},
+      {:mix_test_watch, "~> 1.0", only: :dev},
+      {:mox, "~> 0.5", only: [:bench, :test]}
     ]
   end
 
@@ -81,6 +83,7 @@ defmodule Commanded.Mixfile do
         "guides/Getting Started.md",
         "guides/Choosing an Event Store.md",
         "guides/Usage.md",
+        "guides/Application.md",
         "guides/Aggregates.md",
         "guides/Commands.md",
         "guides/Events.md",
@@ -89,7 +92,11 @@ defmodule Commanded.Mixfile do
         "guides/Serialization.md",
         "guides/Read Model Projections.md",
         "guides/Testing.md",
-        "guides/Deployment.md"
+        "guides/Deployment.md",
+        "guides/upgrades/0.19-1.0.md": [
+          filename: "0.19-1.0",
+          title: "Upgrade guide v0.19.x to v1.0"
+        ]
       ],
       groups_for_extras: [
         Introduction: [
@@ -98,6 +105,7 @@ defmodule Commanded.Mixfile do
           "guides/Usage.md"
         ],
         "Building blocks": [
+          "guides/Application.md",
           "guides/Aggregates.md",
           "guides/Commands.md",
           "guides/Events.md",
@@ -109,6 +117,9 @@ defmodule Commanded.Mixfile do
           "guides/Read Model Projections.md",
           "guides/Testing.md",
           "guides/Deployment.md"
+        ],
+        Upgrades: [
+          "guides/upgrades/0.19-1.0.md"
         ]
       ],
       groups_for_modules: [
@@ -169,6 +180,7 @@ defmodule Commanded.Mixfile do
           Commanded.Middleware.Pipeline
         ],
         Testing: [
+          Commanded.AggregateCase,
           Commanded.Assertions.EventAssertions
         ]
       ]
@@ -201,5 +213,14 @@ defmodule Commanded.Mixfile do
 
   defp aliases do
     []
+  end
+
+  defp dialyzer do
+    [
+      ignore_warnings: ".dialyzer_ignore.exs",
+      plt_add_apps: [:ex_unit, :jason, :mix, :phoenix_pubsub],
+      plt_add_deps: :app_tree,
+      plt_file: {:no_warn, "priv/plts/commanded.plt"}
+    ]
   end
 end
