@@ -5,6 +5,7 @@ defmodule Commanded.ProcessManagers.ProcessManagerInstance do
 
   require Logger
 
+  alias Commanded.Application
   alias Commanded.ProcessManagers.{ProcessRouter, FailureContext}
   alias Commanded.EventStore
   alias Commanded.EventStore.{RecordedEvent, SnapshotData}
@@ -43,15 +44,15 @@ defmodule Commanded.ProcessManagers.ProcessManagerInstance do
   @doc """
   Checks whether or not the process manager has already processed events
   """
-  def new?(process_manager) do
-    GenServer.call(process_manager, :new?)
+  def new?(instance) do
+    GenServer.call(instance, :new?)
   end
 
   @doc """
   Handle the given event by delegating to the process manager module
   """
-  def process_event(process_manager, %RecordedEvent{} = event) do
-    GenServer.cast(process_manager, {:process_event, event})
+  def process_event(instance, %RecordedEvent{} = event) do
+    GenServer.cast(instance, {:process_event, event})
   end
 
   @doc """
@@ -59,16 +60,21 @@ defmodule Commanded.ProcessManagers.ProcessManagerInstance do
 
   Typically called when it has reached its final state.
   """
-  def stop(process_manager) do
-    GenServer.call(process_manager, :stop)
+  def stop(instance) do
+    GenServer.call(instance, :stop)
   end
 
   @doc """
   Fetch the process state of this instance
   """
-  def process_state(process_manager) do
-    GenServer.call(process_manager, :process_state)
+  def process_state(instance) do
+    GenServer.call(instance, :process_state)
   end
+
+  @doc """
+  Get the current process manager instance's identity.
+  """
+  def identity, do: Process.get(:process_uuid)
 
   @doc false
   @impl GenServer
@@ -81,10 +87,10 @@ defmodule Commanded.ProcessManagers.ProcessManagerInstance do
   """
   @impl GenServer
   def handle_continue(:fetch_state, %State{} = state) do
-    %State{application: application} = state
+    %State{application: application, process_uuid: process_uuid} = state
 
     state =
-      case EventStore.read_snapshot(application, process_state_uuid(state)) do
+      case EventStore.read_snapshot(application, snapshot_uuid(state)) do
         {:ok, snapshot} ->
           %State{
             state
@@ -95,6 +101,8 @@ defmodule Commanded.ProcessManagers.ProcessManagerInstance do
         {:error, :snapshot_not_found} ->
           state
       end
+
+    Process.put(:process_uuid, process_uuid)
 
     {:noreply, state}
   end
@@ -143,6 +151,14 @@ defmodule Commanded.ProcessManagers.ProcessManagerInstance do
     {:stop, :normal, state}
   end
 
+  @doc false
+  @impl GenServer
+  def handle_info(message, state) do
+    Logger.error(fn -> describe(state) <> " received unexpected message: " <> inspect(message) end)
+
+    {:noreply, state}
+  end
+
   defp event_already_seen?(%RecordedEvent{}, %State{last_seen_event: nil}),
     do: false
 
@@ -162,11 +178,11 @@ defmodule Commanded.ProcessManagers.ProcessManagerInstance do
     {:noreply, state, idle_timeout}
   end
 
-  defp process_unseen_event(event, %State{} = state, context \\ %{}) do
+  defp process_unseen_event(%RecordedEvent{} = event, %State{} = state, context \\ %{}) do
     %RecordedEvent{correlation_id: correlation_id, event_id: event_id, event_number: event_number} =
       event
 
-    %State{application: application, idle_timeout: idle_timeout} = state
+    %State{idle_timeout: idle_timeout} = state
 
     case handle_event(event, state) do
       {:error, error} ->
@@ -182,7 +198,7 @@ defmodule Commanded.ProcessManagers.ProcessManagerInstance do
 
       commands ->
         # Copy event id, as causation id, and correlation id from handled event.
-        opts = [application: application, causation_id: event_id, correlation_id: correlation_id]
+        opts = [causation_id: event_id, correlation_id: correlation_id, returning: false]
 
         with :ok <- commands |> List.wrap() |> dispatch_commands(opts, state, event) do
           process_state = mutate_state(event, state)
@@ -221,13 +237,9 @@ defmodule Commanded.ProcessManagers.ProcessManagerInstance do
     end
   end
 
-  defp handle_event_error(error, failed_event, state, context) do
+  defp handle_event_error(error, %RecordedEvent{} = failed_event, %State{} = state, context) do
     %RecordedEvent{data: data} = failed_event
-
-    %State{
-      idle_timeout: idle_timeout,
-      process_manager_module: process_manager_module
-    } = state
+    %State{idle_timeout: idle_timeout, process_manager_module: process_manager_module} = state
 
     failure_context = %FailureContext{
       pending_commands: [],
@@ -299,12 +311,8 @@ defmodule Commanded.ProcessManagers.ProcessManagerInstance do
       describe(state) <> " attempting to dispatch command: #{inspect(command)}"
     end)
 
-    case application.dispatch(command, opts) do
+    case Application.dispatch(application, command, opts) do
       :ok ->
-        dispatch_commands(pending_commands, opts, state, last_event)
-
-      # when include_execution_result is set to true, the dispatcher returns an :ok tuple
-      {:ok, _} ->
         dispatch_commands(pending_commands, opts, state, last_event)
 
       error ->
@@ -385,7 +393,7 @@ defmodule Commanded.ProcessManagers.ProcessManagerInstance do
     } = state
 
     snapshot = %SnapshotData{
-      source_uuid: process_state_uuid(state),
+      source_uuid: snapshot_uuid(state),
       source_version: source_version,
       source_type: Atom.to_string(process_manager_module),
       data: process_state
@@ -397,7 +405,7 @@ defmodule Commanded.ProcessManagers.ProcessManagerInstance do
   defp delete_state(%State{} = state) do
     %State{application: application} = state
 
-    EventStore.delete_snapshot(application, process_state_uuid(state))
+    EventStore.delete_snapshot(application, snapshot_uuid(state))
   end
 
   defp ack_event(%RecordedEvent{} = event, %State{} = state) do
@@ -406,11 +414,8 @@ defmodule Commanded.ProcessManagers.ProcessManagerInstance do
     ProcessRouter.ack_event(process_router, event, self())
   end
 
-  defp process_state_uuid(%State{} = state) do
-    %State{
-      process_manager_name: process_manager_name,
-      process_uuid: process_uuid
-    } = state
+  defp snapshot_uuid(%State{} = state) do
+    %State{process_manager_name: process_manager_name, process_uuid: process_uuid} = state
 
     inspect(process_manager_name) <> "-" <> inspect(process_uuid)
   end

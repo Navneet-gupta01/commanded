@@ -1,99 +1,188 @@
 defmodule Commanded.ProcessManagers.ProcessManagerInstanceTest do
-  use Commanded.StorageCase
+  use ExUnit.Case
 
-  alias Commanded.ExampleDomain.BankAccount.Commands.OpenAccount
-  alias Commanded.ExampleDomain.BankApp
-  alias Commanded.ExampleDomain.BankRouter
+  import Mox
+
+  alias Commanded.Application.Config
+  alias Commanded.Application.Mock, as: MockApplication
+  alias Commanded.ExampleDomain.BankAccount.Commands.WithdrawMoney
   alias Commanded.ExampleDomain.MoneyTransfer.Events.MoneyTransferRequested
   alias Commanded.ExampleDomain.TransferMoneyProcessManager
-  alias Commanded.EventStore.RecordedEvent
+  alias Commanded.EventStore.Adapters.Mock, as: MockEventStore
+  alias Commanded.EventStore.SnapshotData
   alias Commanded.ProcessManagers.ProcessManagerInstance
-  alias Commanded.Helpers.CommandAuditMiddleware
-  alias Commanded.Helpers.ProcessHelper
+  alias Commanded.ProcessManagers.ProcessRouter
+
+  setup :set_mox_global
+  setup :verify_on_exit!
 
   setup do
-    start_supervised!(CommandAuditMiddleware)
-    start_supervised!(BankApp)
-
-    :ok
+    Config.associate(self(), MockApplication,
+      application: MockApplication,
+      event_store: {MockEventStore, %{}}
+    )
   end
 
-  test "process manager handles an event" do
-    transfer_uuid = UUID.uuid4()
-    account1_uuid = UUID.uuid4()
-    account2_uuid = UUID.uuid4()
+  describe "process manager instance" do
+    test "handles an event and dispatches a command" do
+      transfer_uuid = UUID.uuid4()
+      debit_account = UUID.uuid4()
+      credit_account = UUID.uuid4()
+      expected_source_uuid = "\"TransferMoneyProcessManager\"-\"#{transfer_uuid}\""
 
-    :ok = open_account(account1_uuid, 1_000)
-    :ok = open_account(account2_uuid, 500)
+      expect(MockEventStore, :read_snapshot, fn _adapter_meta, ^expected_source_uuid ->
+        {:error, :snapshot_not_found}
+      end)
 
-    {:ok, process_manager} =
-      ProcessManagerInstance.start_link(
-        application: BankApp,
-        idle_timeout: :infinity,
-        process_manager_name: "TransferMoneyProcessManager",
-        process_manager_module: TransferMoneyProcessManager,
-        process_router: self(),
-        process_uuid: transfer_uuid
-      )
+      expect(MockEventStore, :record_snapshot, fn _adapter_meta, snapshot ->
+        assert %SnapshotData{
+                 data: %TransferMoneyProcessManager{
+                   amount: 100,
+                   credit_account: ^credit_account,
+                   debit_account: ^debit_account,
+                   status: :withdraw_money_from_debit_account,
+                   transfer_uuid: ^transfer_uuid
+                 },
+                 source_type: "Elixir.Commanded.ExampleDomain.TransferMoneyProcessManager",
+                 source_uuid: expected_source_uuid,
+                 source_version: 1
+               } = snapshot
 
-    event = %RecordedEvent{
-      event_number: 1,
-      stream_id: "stream-id",
-      stream_version: 1,
-      data: %MoneyTransferRequested{
-        transfer_uuid: transfer_uuid,
-        debit_account: account1_uuid,
-        credit_account: account2_uuid,
-        amount: 100
-      }
-    }
+        :ok
+      end)
 
-    :ok = ProcessManagerInstance.process_event(process_manager, event)
+      expect(MockApplication, :dispatch, fn command, _opts ->
+        assert %WithdrawMoney{
+                 account_number: ^debit_account,
+                 transfer_uuid: ^transfer_uuid,
+                 amount: 100
+               } = command
 
-    # Should send ack to process router after processing event
-    assert_receive({:"$gen_cast", {:ack_event, ^event, _instance}}, 1_000)
+        :ok
+      end)
 
-    ProcessHelper.shutdown(process_manager)
-  end
+      {:ok, instance} = start_process_manager_instance(transfer_uuid)
 
-  test "should provide `__name__/0` function" do
-    assert TransferMoneyProcessManager.__name__() ==
-             "Commanded.ExampleDomain.TransferMoneyProcessManager"
-  end
+      event =
+        to_recorded_event(%MoneyTransferRequested{
+          transfer_uuid: transfer_uuid,
+          debit_account: debit_account,
+          credit_account: credit_account,
+          amount: 100
+        })
 
-  test "should ensure a process manager application is provided" do
-    assert_raise ArgumentError, "NoAppProcessManager expects :application option", fn ->
-      Code.eval_string("""
-        defmodule NoAppProcessManager do
-          use Commanded.ProcessManagers.ProcessManager, name: __MODULE__
-        end
-      """)
+      :ok = ProcessManagerInstance.process_event(instance, event)
+
+      # Should send ack to process router after processing event
+      assert_receive({:"$gen_cast", {:ack_event, ^event, _instance}}, 1_000)
     end
-  end
 
-  test "should ensure a process manager name is provided" do
-    assert_raise ArgumentError, "UnnamedProcessManager expects :name option", fn ->
-      Code.eval_string("""
-        defmodule UnnamedProcessManager do
-          use Commanded.ProcessManagers.ProcessManager, application: Commanded.DefaultApp
-        end
-      """)
-    end
-  end
+    test "get current process identity" do
+      alias Commanded.ProcessManagers.IdentityProcessManager
+      alias Commanded.ProcessManagers.IdentityProcessManager.AnEvent
+      alias Commanded.DefaultApp
+      alias Commanded.Helpers.Wait
 
-  test "should allow using process manager module as name" do
-    Code.eval_string("""
-      defmodule MyProcessManager do
-        use Commanded.ProcessManagers.ProcessManager,
-          application: Commanded.DefaultApp,
-          name: __MODULE__
+      start_supervised!(DefaultApp)
+
+      {:ok, process_router} = start_supervised(IdentityProcessManager)
+
+      process_uuids = Enum.sort([UUID.uuid4(), UUID.uuid4(), UUID.uuid4()])
+
+      event = to_recorded_event(%AnEvent{uuids: process_uuids, reply_to: self()})
+
+      send(process_router, {:events, [event]})
+
+      process_instances =
+        Wait.until(fn ->
+          process_instances = ProcessRouter.process_instances(process_router)
+
+          assert process_instances
+                 |> Enum.map(fn {process_uuid, _pid} -> process_uuid end)
+                 |> Enum.sort() == process_uuids
+
+          process_instances
+        end)
+
+      for {process_uuid, pid} <- process_instances do
+        assert_receive {:identity, ^process_uuid, ^pid}
       end
-    """)
+    end
+
+    test "ignore unexpected messages" do
+      import ExUnit.CaptureLog
+
+      transfer_uuid = UUID.uuid4()
+
+      expect(MockEventStore, :read_snapshot, fn _adapter_meta, _source_uuid ->
+        {:error, :snapshot_not_found}
+      end)
+
+      {:ok, instance} = start_process_manager_instance(transfer_uuid)
+
+      ref = Process.monitor(instance)
+
+      send_unexpected_mesage = fn ->
+        send(instance, :unexpected_message)
+
+        refute_receive {:DOWN, ^ref, :process, ^instance, _}
+      end
+
+      assert capture_log(send_unexpected_mesage) =~
+               "Commanded.ExampleDomain.TransferMoneyProcessManager received unexpected message: :unexpected_message"
+    end
+
+    test "should provide `__name__/0` function" do
+      assert TransferMoneyProcessManager.__name__() ==
+               "Commanded.ExampleDomain.TransferMoneyProcessManager"
+    end
+
+    test "should ensure a process manager application is provided" do
+      assert_raise ArgumentError, "NoAppProcessManager expects :application option", fn ->
+        Code.eval_string("""
+          defmodule NoAppProcessManager do
+            use Commanded.ProcessManagers.ProcessManager, name: __MODULE__
+          end
+        """)
+      end
+    end
+
+    test "should ensure a process manager name is provided" do
+      assert_raise ArgumentError, "UnnamedProcessManager expects :name option", fn ->
+        Code.eval_string("""
+          defmodule UnnamedProcessManager do
+            use Commanded.ProcessManagers.ProcessManager, application: Commanded.DefaultApp
+          end
+        """)
+      end
+    end
+
+    test "should allow using process manager module as name" do
+      Code.eval_string("""
+        defmodule MyProcessManager do
+          use Commanded.ProcessManagers.ProcessManager,
+            application: Commanded.DefaultApp,
+            name: __MODULE__
+        end
+      """)
+    end
   end
 
-  defp open_account(account_number, initial_balance) do
-    command = %OpenAccount{account_number: account_number, initial_balance: initial_balance}
+  defp start_process_manager_instance(transfer_uuid) do
+    start_supervised(
+      {ProcessManagerInstance,
+       application: MockApplication,
+       idle_timeout: :infinity,
+       process_manager_name: "TransferMoneyProcessManager",
+       process_manager_module: TransferMoneyProcessManager,
+       process_router: self(),
+       process_uuid: transfer_uuid}
+    )
+  end
 
-    BankRouter.dispatch(command, application: BankApp)
+  defp to_recorded_event(event) do
+    alias Commanded.EventStore.RecordedEvent
+
+    %RecordedEvent{event_number: 1, stream_id: "stream-id", stream_version: 1, data: event}
   end
 end

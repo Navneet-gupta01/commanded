@@ -26,7 +26,7 @@ defmodule Commanded.Aggregates.ExecuteCommandTest do
 
     {:ok, 1, events} = Aggregate.execute(BankApp, BankAccount, account_number, context)
 
-    assert events == [%BankAccountOpened{account_number: account_number, initial_balance: 1000}]
+    assert events == [%BankAccountOpened{account_number: account_number, initial_balance: 1_000}]
 
     shutdown_aggregate(BankApp, BankAccount, account_number)
 
@@ -52,11 +52,11 @@ defmodule Commanded.Aggregates.ExecuteCommandTest do
 
     {:ok, 1, events} = Aggregate.execute(BankApp, BankAccount, account_number, context)
 
-    assert events == [%BankAccountOpened{account_number: account_number, initial_balance: 1000}]
+    assert events == [%BankAccountOpened{account_number: account_number, initial_balance: 1_000}]
 
     shutdown_aggregate(BankApp, BankAccount, account_number)
 
-    # reload aggregate to fetch persisted events from event store and rebuild state by applying saved events
+    # Reload aggregate to fetch persisted events from event store and rebuild state by applying saved events
     {:ok, ^account_number} = open_aggregate(BankAccount, account_number)
 
     assert Aggregate.aggregate_version(BankApp, BankAccount, account_number) == 1
@@ -125,7 +125,7 @@ defmodule Commanded.Aggregates.ExecuteCommandTest do
       assert_event_result(fn %Command{id: id} -> {:ok, %Event{id: id}} end)
     end
 
-    test "should allow `{:ok, event}` return value" do
+    test "should allow `{:ok, [event]}` tagged tuple return value" do
       assert_event_result(fn %Command{id: id} -> {:ok, [%Event{id: id}]} end)
     end
   end
