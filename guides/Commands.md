@@ -63,7 +63,7 @@ end
 
 A command handler receives the aggregate and the command being executed. It allows you to validate, authorize, and/or enrich the command with additional data before executing the appropriate aggregate module function.
 
-The command handler must implement the `Commanded.Commands.Handler` behaviour consisting of a single `handle/2` function. It receives the aggregate state and the command to be handled. It must return the raised domain events from the aggregate. It may return an `{:error, reason}` tuple on failure.
+The command handler must implement the `Commanded.Commands.Handler` behaviour consisting of a single `handle/2` function. It receives the aggregate state and the command to be handled. It must return the raised domain events from the aggregate. It may return an `{:error, reason}` tuple on failure. The `handle/2` function is executed in the same process as the aggregate itself and is therefore within the consistency boundary of the aggregate. In effect, there is no essential difference between using the `handle/2` function in a command handler module vs. the `execute/2` function in the aggregate module aside from organization of your source code.
 
 ```elixir
 defmodule OpenAccountHandler do
@@ -87,11 +87,23 @@ It is also possible to route a command directly to an aggregate, without requiri
 defmodule BankRouter do
   use Commanded.Commands.Router
 
+  # will route to `BankAccount.execute/2`
   dispatch OpenAccount, to: BankAccount, identity: :account_number
 end
 ```
 
-The aggregate must implement an `execute/2` function that receives the aggregate's state and the command to execute.
+By default, the aggregate module's `execute/2` function will be called with the aggregate's state and the command to execute. Using this approach, you will create an `execute/2` clause that pattern-matches on each command that the aggregate should handle.
+
+Alternatively, you may specify the name of a function (also receiving both the aggregate state and the command) on your aggregate module to which the command will be dispatched:
+
+```elixir
+defmodule BankRouter do
+  use Commanded.Commands.Router
+
+  # Will route to `BankAccount.open_account/2`
+  dispatch OpenAccount, to: BankAccount, function: :open_account, identity: :account_number
+end
+```
 
 ### Dispatching commands
 
@@ -399,7 +411,7 @@ end
 
 The inactivity timeout is specified in milliseconds, after which time the aggregate process will be stopped if no other messages are received.
 
-Return `:stop` to immediately shutdown the aggregate process. Return `:infinity` to prevent the aggregate instance from shutting down.
+Return `:stop` or `{:stop, reason}` to immediately shutdown the aggregate process. Return `:infinity` to prevent the aggregate instance from shutting down.
 
 You can also return `:hibernate` and the process is hibernated, it will continue its loop once a message is in its message queue. Hibernating an aggregate causes garbage collection and minimises the memory used by the process. Hibernating should not be used aggressively as too much time could be spent garbage collecting.
 

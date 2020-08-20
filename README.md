@@ -41,7 +41,7 @@ You can help support Commanded by helping to fund its ongoing development, new f
 
 MIT License
 
-[![Build Status](https://travis-ci.com/commanded/commanded.svg?branch=master)](https://travis-ci.com/commanded/commanded) [![Join the chat at https://gitter.im/commanded/Lobby](https://badges.gitter.im/commanded/Lobby.svg)](https://gitter.im/commanded/Lobby?utm_source=badge&utm_medium=badge&utm_campaign=pr-badge&utm_content=badge)
+[![Build Status](https://github.com/commanded/commanded/workflows/Test/badge.svg?branch=master)](https://github.com/commanded/commanded/actions) [![Join the chat at https://gitter.im/commanded/Lobby](https://badges.gitter.im/commanded/Lobby.svg)](https://gitter.im/commanded/Lobby?utm_source=badge&utm_medium=badge&utm_campaign=pr-badge&utm_content=badge)
 
 ---
 
@@ -137,6 +137,7 @@ Commanded exists thanks to the following people who have contributed.
 - [Brenton Annan](https://github.com/brentonannan)
 - [Chris Brodt](https://github.com/uberbrodt)
 - [Chris Martin](https://github.com/trbngr)
+- [Dave Lucia](https://github.com/davydog187)
 - [David Carlin](https://github.com/davich)
 - [Danni Friedland](https://github.com/BlueHotDog)
 - [Fernando Mendes](https://github.com/justmendes)
@@ -146,9 +147,11 @@ Commanded exists thanks to the following people who have contributed.
 - [Joan Zapata](https://github.com/JoanZapata)
 - [João Thallis](https://github.com/joaothallis)
 - [John Wilger](https://github.com/jwilger)
+- [Joseph Lozano](https://github.com/joseph-lozano)
 - [Kok J Sam](https://github.com/sammkj)
 - [Leif Gensert](https://github.com/leifg)
 - [Luís Ferreira](https://github.com/zamith)
+- [Marcelo Dominguez](https://github.com/marpo60)
 - [Matt Doughty](https://github.com/m-doughty)
 - [Miguel Palhas](https://github.com/naps62)
 - [Nigel Thorne](https://github.com/nigelthorne)
@@ -157,7 +160,9 @@ Commanded exists thanks to the following people who have contributed.
 - [Patrick Detlefsen](https://github.com/patrickdet)
 - [Phil Chen](https://github.com/fahchen)
 - [Raphaël Lustin](https://github.com/rlustin)
+- [Štefan Ľupták](https://github.com/EskiMag)
 - [Tobiasz Małecki](https://github.com/amatalai)
+- [Yuri de Figueiredo](https://github.com/y86)
 
 ## Need help?
 

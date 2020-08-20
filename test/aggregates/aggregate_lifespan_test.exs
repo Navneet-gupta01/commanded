@@ -1,5 +1,5 @@
 defmodule Commanded.Aggregates.AggregateLifespanTest do
-  use Commanded.StorageCase
+  use ExUnit.Case
 
   alias Commanded.Aggregates.{DefaultLifespanRouter, LifespanAggregate, LifespanRouter}
   alias Commanded.Aggregates.LifespanAggregate.{Command, Event}
@@ -39,7 +39,7 @@ defmodule Commanded.Aggregates.AggregateLifespanTest do
 
       assert :ok = DefaultLifespanRouter.dispatch(command, application: DefaultApp)
 
-      refute_receive {:DOWN, ^ref, :process, _, :normal}, 10
+      refute_receive {:DOWN, ^ref, :process, _pid, _reason}
     end
 
     test "should use default `after_command/1` lifespan when none specified'", %{
@@ -50,7 +50,7 @@ defmodule Commanded.Aggregates.AggregateLifespanTest do
 
       assert :ok = DefaultLifespanRouter.dispatch(command, application: DefaultApp)
 
-      refute_receive {:DOWN, ^ref, :process, _, :normal}, 10
+      refute_receive {:DOWN, ^ref, :process, _pid, _reason}
     end
 
     test "should use default `after_error/1` lifespan when none specified'", %{
@@ -62,7 +62,7 @@ defmodule Commanded.Aggregates.AggregateLifespanTest do
       {:error, {:failed, nil, nil}} =
         DefaultLifespanRouter.dispatch(command, application: DefaultApp)
 
-      refute_receive {:DOWN, ^ref, :process, _, :normal}, 10
+      refute_receive {:DOWN, ^ref, :process, _pid, _reason}
     end
 
     test "should call `after_event/1` callback function", %{
@@ -97,7 +97,7 @@ defmodule Commanded.Aggregates.AggregateLifespanTest do
 
       :ok = LifespanRouter.dispatch(command, application: DefaultApp)
 
-      assert_receive {:DOWN, ^ref, :process, _, :normal}
+      assert_receive {:DOWN, ^ref, :process, _pid, :normal}
     end
 
     test "should call `after_command/1` callback function when no domain events", %{
@@ -132,7 +132,7 @@ defmodule Commanded.Aggregates.AggregateLifespanTest do
 
       :ok = LifespanRouter.dispatch(command, application: DefaultApp)
 
-      assert_receive {:DOWN, ^ref, :process, _, :normal}
+      assert_receive {:DOWN, ^ref, :process, _pid, :normal}
     end
 
     test "should call `after_error/1` callback function on error", %{
@@ -169,7 +169,7 @@ defmodule Commanded.Aggregates.AggregateLifespanTest do
       {:error, {:failed, _reply_to, :stop}} =
         LifespanRouter.dispatch(command, application: DefaultApp)
 
-      assert_receive {:DOWN, ^ref, :process, _, :normal}
+      assert_receive {:DOWN, ^ref, :process, _pid, :normal}
     end
 
     test "should not shutdown if another command executed", %{
@@ -190,8 +190,8 @@ defmodule Commanded.Aggregates.AggregateLifespanTest do
       assert_receive :after_command
       assert_receive :after_command
 
-      refute_receive {:DOWN, ^ref, :process, _, :normal}, 25
-      assert_receive {:DOWN, ^ref, :process, _, :normal}
+      refute_receive {:DOWN, ^ref, :process, _pid, _reason}, 25
+      assert_receive {:DOWN, ^ref, :process, _pid, :normal}
     end
 
     test "should reopen the aggregate to execute command if it is stopped by the previous command",
@@ -210,7 +210,7 @@ defmodule Commanded.Aggregates.AggregateLifespanTest do
 
       Task.yield_many(tasks)
 
-      assert_receive {:DOWN, ^ref, :process, _, :normal}
+      assert_receive {:DOWN, ^ref, :process, _pid, :normal}
     end
 
     test "should reopen the aggregate to execute command if it is stopped by an error",
@@ -230,7 +230,7 @@ defmodule Commanded.Aggregates.AggregateLifespanTest do
 
       Task.yield_many(tasks)
 
-      assert_receive {:DOWN, ^ref, :process, _, :normal}
+      assert_receive {:DOWN, ^ref, :process, _pid, :normal}
     end
 
     test "should stop process when requested", %{
@@ -241,7 +241,7 @@ defmodule Commanded.Aggregates.AggregateLifespanTest do
 
       :ok = LifespanRouter.dispatch(command, application: DefaultApp)
 
-      assert_receive {:DOWN, ^ref, :process, _, :normal}
+      assert_receive {:DOWN, ^ref, :process, _pid, :normal}
     end
 
     test "should adhere to aggregate lifespan after taking snapshot",
@@ -265,7 +265,7 @@ defmodule Commanded.Aggregates.AggregateLifespanTest do
 
       :ok = LifespanRouter.dispatch(command, application: DefaultApp)
 
-      assert_receive {:DOWN, ^ref, :process, _, :normal}
+      assert_receive {:DOWN, ^ref, :process, _pid, :normal}
       assert {:ok, _snapshot} = EventStore.read_snapshot(DefaultApp, aggregate_uuid)
     end
 
@@ -298,7 +298,7 @@ defmodule Commanded.Aggregates.AggregateLifespanTest do
       # Publish events to aggregate after taking snapshot
       send(pid, {:events, events})
 
-      assert_receive {:DOWN, ^ref, :process, _, :normal}
+      assert_receive {:DOWN, ^ref, :process, _pid, :normal}
       assert {:ok, _snapshot} = EventStore.read_snapshot(DefaultApp, aggregate_uuid)
     end
 
@@ -319,55 +319,6 @@ defmodule Commanded.Aggregates.AggregateLifespanTest do
       send(pid, {:events, events})
 
       refute_receive {:DOWN, ^ref, :process, ^pid, _}
-    end
-  end
-
-  describe "compile time safety" do
-    test "should fail to compile when missing `after_event/1` function" do
-      assert_raise ArgumentError,
-                   "Aggregate lifespan `BankAccountLifespan1` does not define a callback function: `after_event/1`",
-                   fn ->
-                     Code.eval_string("""
-                       alias Commanded.ExampleDomain.BankAccount
-                       alias Commanded.ExampleDomain.BankAccount.Commands.{OpenAccount, DepositMoney}
-
-                       defmodule BankAccountLifespan1 do
-                       end
-
-                       defmodule BankRouter do
-                         use Commanded.Commands.Router
-
-                         dispatch [OpenAccount],
-                           to: BankAccount,
-                           lifespan: BankAccountLifespan1,
-                           identity: :account_number
-                       end
-                     """)
-                   end
-    end
-
-    test "should fail to compile when missing `after_command/1` function" do
-      assert_raise ArgumentError,
-                   "Aggregate lifespan `BankAccountLifespan2` does not define a callback function: `after_command/1`",
-                   fn ->
-                     Code.eval_string("""
-                       alias Commanded.ExampleDomain.BankAccount
-                       alias Commanded.ExampleDomain.BankAccount.Commands.{OpenAccount, DepositMoney}
-
-                       defmodule BankAccountLifespan2 do
-                         def after_event(_event), do: :stop
-                       end
-
-                       defmodule BankRouter do
-                         use Commanded.Commands.Router
-
-                         dispatch [OpenAccount],
-                           to: BankAccount,
-                           lifespan: BankAccountLifespan2,
-                           identity: :account_number
-                       end
-                     """)
-                   end
     end
   end
 end
